@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aml_web_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aml_web
+    # Host port 15433 avoids collisions with another Postgres often bound to 5433/5434.
+    ports:
+      - "15433:5432"
+    volumes:
+      - aml_web_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aml_web"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    container_name: card_cashin_web
+    ports:
+      - "8000:8000"
+    environment:
+      # Overrides DATABASE_URL from env_file so the container talks to Postgres on the Compose network (`db`).
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/aml_web
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  aml_web_pgdata:

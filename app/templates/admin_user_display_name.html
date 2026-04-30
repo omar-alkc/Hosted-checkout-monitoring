@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/admin/users">← Users</a></p>
+  <h1>Edit display name</h1>
+  <p class="muted">User <strong>{{ target.username }}</strong> ({{ target.role }})</p>
+  <div class="panel">
+    <form method="post" action="/admin/users/{{ target.id }}/display-name" onsubmit="amlFormBusy(this)">
+      <label>Display name
+        <input type="text" name="display_name" value="{{ target.display_name or '' }}" maxlength="256" autocomplete="off" />
+      </label>
+      <p><button type="submit">Save</button></p>
+    </form>
+  </div>
+{% endblock %}

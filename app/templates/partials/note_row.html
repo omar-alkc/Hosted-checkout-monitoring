@@ -1,0 +1,25 @@
+<li id="note-{{ note.id }}" style="margin-bottom: 0.65rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem">
+  <div style="display:flex; gap:0.5rem; align-items:center; justify-content:space-between">
+    <div class="muted">{{ note.created_at | shortdt }} · {{ note.author_name or "—" }}</div>
+    {% if can_edit %}
+      <div style="display:flex; gap:0.35rem; align-items:center">
+        <button
+          type="button"
+          class="button secondary"
+          hx-get="/detections/{{ detection_id }}/notes/{{ note.id }}/edit"
+          hx-target="#note-{{ note.id }}"
+          hx-swap="innerHTML"
+        >Edit</button>
+        <button
+          type="button"
+          class="button secondary"
+          hx-post="/detections/{{ detection_id }}/notes/{{ note.id }}/delete"
+          hx-target="#note-{{ note.id }}"
+          hx-swap="outerHTML"
+          hx-confirm="Delete this note?"
+        >Delete</button>
+      </div>
+    {% endif %}
+  </div>
+  <div style="margin-top: 0.25rem">{{ note.body }}</div>
+</li>

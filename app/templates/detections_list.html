@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Detections</h1>
+  {% if flash_notice == "bulk_status" %}
+    <div class="flash success">Bulk status: applied {{ bulk_applied or 0 }}, skipped {{ bulk_skipped or 0 }} (invalid transition or missing id).</div>
+  {% endif %}
+  <div class="panel">
+    <form class="filters-grid" method="get" action="/detections">
+      <input type="hidden" name="page" value="1" />
+      <label>Status
+        <select name="status">
+          <option value="">(any)</option>
+          {% for k, lab in status_labels.items() %}
+            <option value="{{ k }}" {% if status_filter == k %}selected{% endif %}>{{ lab }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Scenario
+        <select name="scenario_id" title="Filter by scenario">
+          <option value="">(any)</option>
+          {% for k, lab in scenario_labels.items() %}
+            <option value="{{ k }}" {% if scenario_filter == k %}selected{% endif %}>{{ lab }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Risk
+        <select name="risk" title="Filter by metrics Risk (High / Low)">
+          <option value="">(any)</option>
+          <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>High</option>
+          <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>Low</option>
+        </select>
+      </label>
+      <label>Import batch id
+        <input type="number" name="batch_id" value="{{ batch_filter or '' }}" min="1" step="1" />
+      </label>
+      <label>From date
+        <input type="date" name="date_from" value="{{ date_from_input or '' }}" />
+      </label>
+      <label>To date
+        <input type="date" name="date_to" value="{{ date_to_input or '' }}" />
+      </label>
+      <label>Detection id
+        <input type="number" name="detection_id" value="{{ detection_id_input or '' }}" min="1" step="1" />
+      </label>
+      <label>MSISDN (wallet id)
+        <input type="text" name="msisdn" value="{{ msisdn_input or '' }}" placeholder="Phone / wallet" />
+      </label>
+      <div class="filter-actions">
+        <button type="submit" class="button">Filter</button>
+        <a class="button secondary" href="/detections">Reset</a>
+        {% if show_export %}
+          <a class="button secondary filter-export" href="/detections/export{% if export_query %}?{{ export_query }}{% endif %}">Export .xlsx</a>
+          <span class="muted filter-actions-note">Export uses the filters above.</span>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+    <div class="scroll-x panel">
+      <table class="data js-sortable">
+        <thead>
+          {% if show_bulk %}
+          <tr>
+            <th style="width: 2.5rem">
+              <input type="checkbox" id="det-select-all" title="Select all" aria-label="Select all rows" />
+            </th>
+            <th class="th-sortable" data-sort-col="1" data-sort-type="number">ID</th>
+            <th class="th-sortable" data-sort-col="2" data-sort-type="text">Scenario</th>
+            <th class="th-sortable" data-sort-col="3" data-sort-type="number">Previous detection count</th>
+            <th class="th-sortable" data-sort-col="4" data-sort-type="text">Risk</th>
+            <th class="th-sortable" data-sort-col="5" data-sort-type="text">Status</th>
+            <th class="th-sortable" data-sort-col="6" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="7" data-sort-type="date" data-sort-default="desc">Updated</th>
+          </tr>
+          {% else %}
+          <tr>
+            <th class="th-sortable" data-sort-col="0" data-sort-type="number">ID</th>
+            <th class="th-sortable" data-sort-col="1" data-sort-type="text">Scenario</th>
+            <th class="th-sortable" data-sort-col="2" data-sort-type="number">Previous detection count</th>
+            <th class="th-sortable" data-sort-col="3" data-sort-type="text">Risk</th>
+            <th class="th-sortable" data-sort-col="4" data-sort-type="text">Status</th>
+            <th class="th-sortable" data-sort-col="5" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Updated</th>
+          </tr>
+          {% endif %}
+        </thead>
+        <tbody>
+          {% for d in detections %}
+            <tr>
+              {% if show_bulk %}<td><input type="checkbox" name="ids" value="{{ d.id }}" form="det-bulk-form" /></td>{% endif %}
+              <td data-sort-value="{{ d.id }}"><a href="/detections/{{ d.id }}">{{ d.id }}</a></td>
+              <td data-sort-value="{{ d.scenario_id }}" title="{{ d.scenario_id }}">{{ scenario_labels.get(d.scenario_id, d.scenario_id) }}</td>
+              <td data-sort-value="{{ previous_counts.get(d.id, 0) }}">{{ previous_counts.get(d.id, 0) }}</td>
+              {% set _m = d.metrics or {} %}
+              {% set _sid_r = (d.scenario_id or "")|string|trim|upper %}
+              {% set _risk_cell = "" %}
+              {% if _sid_r in ["D1", "D2"] %}
+                {% if not _m.get("RiskError") and _m.get("Risk") is not none %}
+                  {% set _risk_cell = (_m.get("Risk") | string).strip() %}
+                {% endif %}
+              {% endif %}
+              <td data-sort-value="{{ _risk_cell }}">{{ _risk_cell }}</td>
+              <td data-sort-value="{{ d.status }}">
+                <span class="badge badge-status-{{ d.status }}">{{ status_labels.get(d.status, d.status) }}</span>
+              </td>
+              <td class="muted" data-sort-value="{% if d.batch %}{{ d.batch.created_at.isoformat() }}{% endif %}">
+                {% if d.batch %}
+                  {% if show_import_links %}<a href="/imports/{{ d.import_batch_id }}">{{ d.batch.created_at | shortdt }}</a>{% else %}{{ d.batch.created_at | shortdt }}{% endif %}
+                {% else %}
+                  {% if show_import_links %}<a href="/imports/{{ d.import_batch_id }}">#{{ d.import_batch_id }}</a>{% else %}#{{ d.import_batch_id }}{% endif %}
+                {% endif %}
+              </td>
+              <td class="muted" data-sort-value="{{ d.updated_at.isoformat() if d.updated_at else '' }}">{{ d.updated_at | shortdt }}</td>
+            </tr>
+          {% endfor %}
+          {% if not detections %}
+            <tr>
+              <td colspan="{% if show_bulk %}8{% else %}7{% endif %}" class="muted">No detections yet. Upload transactions, run scenarios from Imports.</td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      <div class="muted" style="display:grid; grid-template-columns:1fr auto 1fr; gap:0.75rem; align-items:center; justify-content:space-between; margin-top:0.75rem">
+        <div>
+          Showing <strong>{{ detections|length }}</strong> of <strong>{{ total }}</strong>
+          · page <strong>{{ page }}</strong> / <strong>{{ pages }}</strong>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center; justify-content:center">
+          <a class="button secondary" href="{{ page_url(1) }}" title="First page" aria-label="First page" {% if page <= 1 %}aria-disabled="true"{% endif %}>«</a>
+          <a class="button secondary" href="{{ page_url(page - 1) }}" title="Previous page" aria-label="Previous page" {% if page <= 1 %}aria-disabled="true"{% endif %}>‹</a>
+          <a class="button secondary" href="{{ page_url(page + 1) }}" title="Next page" aria-label="Next page" {% if page >= pages %}aria-disabled="true"{% endif %}>›</a>
+          <a class="button secondary" href="{{ page_url(pages) }}" title="Last page" aria-label="Last page" {% if page >= pages %}aria-disabled="true"{% endif %}>»</a>
+        </div>
+        <div style="display:flex; justify-content:flex-end">
+          <label style="display:flex; flex-direction:row; gap:0.4rem; align-items:center; color:inherit; font-size:inherit">
+            Rows
+            <select id="per-page-select" style="min-width:6rem">
+              {% for n in per_page_options %}
+                <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      </div>
+    </div>
+  {% if show_bulk %}
+  <form id="det-bulk-form" method="post">
+    <div class="panel">
+      <h2 style="margin-top: 0">Bulk actions</h2>
+      <p class="muted">Select rows, then set status. Status changes skip rows where the transition is not allowed.</p>
+      <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end">
+        <label>New status
+          <select name="to_status">
+            {% for k in status_keys %}
+              <option value="{{ k }}">{{ status_labels[k] }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" formaction="/detections/bulk-status" formmethod="post" onclick="amlFormBusy(this.form)">Apply status</button>
+        <button type="submit" class="secondary" formaction="/detections/bulk-delete-test" formmethod="post" onclick="amlFormBusy(this.form)">Delete test</button>
+      </div>
+    </div>
+  </form>
+  {% endif %}
+  {% if show_bulk %}
+  <script>
+    (function () {
+      var all = document.getElementById("det-select-all");
+      if (!all) return;
+      all.addEventListener("change", function () {
+        document.querySelectorAll('input[name="ids"][form="det-bulk-form"]').forEach(function (cb) {
+          cb.checked = all.checked;
+        });
+      });
+    })();
+  </script>
+  {% endif %}
+  <script>
+    (function () {
+      var sel = document.getElementById("per-page-select");
+      if (!sel) return;
+      sel.addEventListener("change", function () {
+        try {
+          var url = new URL(window.location.href);
+          url.searchParams.set("per_page", String(sel.value));
+          url.searchParams.set("page", "1");
+          window.location.assign(url.toString());
+        } catch (e) {
+          // no-op
+        }
+      });
+    })();
+  </script>
+{% endblock %}

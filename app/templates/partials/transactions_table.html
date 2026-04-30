@@ -1,0 +1,38 @@
+<div class="scroll-x" style="margin-top:0.5rem">
+  <table class="data js-sortable">
+    <thead>
+      <tr>
+        <th class="th-sortable" data-sort-col="0" data-sort-type="number">#</th>
+        <th class="th-sortable" data-sort-col="1" data-sort-type="text">MSISDN</th>
+        <th class="th-sortable" data-sort-col="2" data-sort-type="text">CardId</th>
+        <th class="th-sortable" data-sort-col="3" data-sort-type="text">Card holder</th>
+        <th class="th-sortable" data-sort-col="4" data-sort-type="text">Bank</th>
+        <th class="th-sortable" data-sort-col="5" data-sort-type="number">Amount</th>
+        <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Date & time</th>
+        <th class="th-sortable" data-sort-col="7" data-sort-type="text">Approved</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in rows %}
+        {% set p = t.payload %}
+        {% set bank = p.get("OPP_card.issuer.bank") %}
+        {% set holder = p.get("AccountHolder") %}
+        {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
+        <tr>
+          <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
+          <td data-sort-value="{{ p.get('WalletId','') }}">{{ p.get("WalletId","") }}</td>
+          <td data-sort-value="{{ p.get('CardId','') }}">{{ p.get("CardId","") }}</td>
+          <td data-sort-value="{% if holder %}{{ holder }}{% endif %}">{% if holder %}{{ holder }}{% else %}—{% endif %}</td>
+          <td data-sort-value="{% if bank %}{{ bank }}{% endif %}">{% if bank %}{{ bank }}{% else %}—{% endif %}</td>
+          <td data-sort-value="{{ p.get('Amount','') }}">{{ p.get("Amount")|amount0 }}</td>
+          <td data-sort-value="{% if ts_raw %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
+          <td data-sort-value="{{ p.get('Approved','') }}">{{ p.get("Approved","") }}</td>
+        </tr>
+      {% endfor %}
+      {% if not rows %}
+        <tr><td colspan="8" class="muted">No matches.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+

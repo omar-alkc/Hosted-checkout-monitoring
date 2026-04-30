@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/imports">← Imports</a></p>
+  <h1>Import {{ batch.id }}</h1>
+  <div class="panel">
+    <p><strong>File:</strong> {{ batch.original_filename }}</p>
+    <p><strong>Status:</strong> {{ batch.status }}</p>
+    <p><strong>Rows stored:</strong> {{ batch.row_count }}</p>
+    {% if batch.error_message %}
+      <div class="error">{{ batch.error_message }}</div>
+    {% endif %}
+    <p class="muted">Detections in DB for this batch: {{ det_count }}</p>
+  </div>
+  {% if batch.status == "ready" %}
+    <div class="panel">
+      <h2>Run scenarios</h2>
+      <p class="muted">Uses <a href="/scenarios">Scenario Manager</a> settings from the database. This replaces existing detections for this batch.</p>
+      <form method="post" action="/imports/{{ batch.id }}/run" onsubmit="amlFormBusy(this)">
+        <label>Period
+          <select name="period">
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="both">Both</option>
+          </select>
+        </label>
+        <p><button type="submit">Run scenarios</button></p>
+      </form>
+    </div>
+  {% endif %}
+  <div class="panel">
+    <p><a href="/detections?batch_id={{ batch.id }}">View detections for this batch</a></p>
+  </div>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="auth-page">
+    <h1>{{ settings.app_title }}</h1>
+    {% if login_error %}
+      <div class="error">{{ login_error }}</div>
+    {% endif %}
+    <div class="panel">
+      <form method="post" action="/login" onsubmit="amlFormBusy(this)">
+        <input type="hidden" name="next" value="{{ next_url or '' }}" />
+        <label>Username
+          <input type="text" name="username" autocomplete="username" required autofocus />
+        </label>
+        <label>Password
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <p><button type="submit">Sign in</button></p>
+      </form>
+    </div>
+  </div>
+{% endblock %}

@@ -1,0 +1,78 @@
+<div class="panel" style="margin-bottom:0">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:0.75rem">
+    <strong>Other transactions (batch {{ batch_id }})</strong>
+    <button type="button" class="button secondary" onclick="window.amlCloseTxPopup && window.amlCloseTxPopup()">Close</button>
+  </div>
+  <p class="muted" style="margin-top:0.5rem">Filter raw transactions in this import batch.</p>
+
+  <form
+    id="tx-filter-form"
+    class="filters-grid"
+    hx-get="/imports/{{ batch_id }}/transactions"
+    hx-target="#tx-popup-body"
+    hx-swap="innerHTML"
+  >
+    <input type="hidden" name="page" value="1" />
+    <input type="hidden" name="exclude_indices" value="{{ exclude_indices_input }}" />
+    <label>MSISDN
+      <input type="text" name="msisdn" value="{{ msisdn_input }}" />
+    </label>
+    <label>CardId
+      <input type="text" name="card_id" value="{{ card_id_input }}" />
+    </label>
+    <label>Card holder name
+      <input type="text" name="account_holder" value="{{ account_holder_input }}" placeholder="Name" />
+    </label>
+    <label>Bank / company name
+      <input type="text" name="bank" value="{{ bank_input }}" />
+    </label>
+    <label>Amount min
+      <input type="number" name="amount_min" value="{{ amount_min_input }}" step="1" />
+    </label>
+    <label>Amount max
+      <input type="number" name="amount_max" value="{{ amount_max_input }}" step="1" />
+    </label>
+    <label>Date from
+      <input type="date" name="date_from" value="{{ date_from_input }}" />
+    </label>
+    <label>Time from
+      <input type="time" name="time_from" value="{{ time_from_input }}" step="60" />
+    </label>
+    <label>Date to
+      <input type="date" name="date_to" value="{{ date_to_input }}" />
+    </label>
+    <label>Time to
+      <input type="time" name="time_to" value="{{ time_to_input }}" step="60" />
+    </label>
+    <label>Approved
+      <select name="approved">
+        <option value="" {% if not approved_input %}selected{% endif %}>(any)</option>
+        <option value="true" {% if approved_input == 'true' %}selected{% endif %}>true</option>
+        <option value="false" {% if approved_input == 'false' %}selected{% endif %}>false</option>
+      </select>
+    </label>
+    <label>Rows
+      <select name="per_page">
+        {% for n in per_page_options %}
+          <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="filter-actions">
+      <button type="submit">Apply</button>
+      <a class="button secondary" href="#" onclick="document.querySelector('#tx-filter-form').reset(); document.querySelector('#tx-filter-form').dispatchEvent(new Event('submit',{cancelable:true})); return false;">Reset</a>
+    </div>
+  </form>
+
+  <div class="muted" style="display:flex; justify-content:space-between; align-items:center; margin-top:0.75rem">
+    <div>Showing <strong>{{ rows|length }}</strong> of <strong>{{ total }}</strong> · page <strong>{{ page }}</strong>/<strong>{{ pages }}</strong></div>
+    <div style="display:flex; gap:0.35rem; align-items:center">
+      <button type="button" class="button secondary" onclick="window.amlTxPage && window.amlTxPage(1)" {% if page<=1 %}disabled{% endif %}>«</button>
+      <button type="button" class="button secondary" onclick="window.amlTxPage && window.amlTxPage({{ page - 1 }})" {% if page<=1 %}disabled{% endif %}>‹</button>
+      <button type="button" class="button secondary" onclick="window.amlTxPage && window.amlTxPage({{ page + 1 }})" {% if page>=pages %}disabled{% endif %}>›</button>
+      <button type="button" class="button secondary" onclick="window.amlTxPage && window.amlTxPage({{ pages }})" {% if page>=pages %}disabled{% endif %}>»</button>
+    </div>
+  </div>
+
+  {% include "partials/transactions_table.html" %}
+</div>

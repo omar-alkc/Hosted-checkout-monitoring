@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/detections">← Detections</a></p>
+  <h1>Detection {{ detection.id }}</h1>
+  {% if flash_notice == "status_saved" %}
+    <div class="flash success">Detection status was updated.</div>
+  {% endif %}
+  <div class="panel">
+    <div style="display:flex; flex-wrap:wrap; gap:0.6rem 0.9rem; align-items:center">
+      <span class="badge badge-status-{{ detection.status }}">{{ status_labels.get(detection.status, detection.status) }}</span>
+      <span><strong>Scenario</strong>: {{ scenario_labels.get(detection.scenario_id, detection.scenario_id) }}</span>
+      <span><strong>Period</strong>: {{ detection.period }}</span>
+      <span><strong>Batch</strong>:
+        {% if current_user.role == 'supervisor' %}
+          <a href="/imports/{{ detection.import_batch_id }}">#{{ detection.import_batch_id }}</a>
+        {% else %}
+          #{{ detection.import_batch_id }}
+        {% endif %}
+      </span>
+      {% if detection.assigned_senior %}
+        <span><strong>Assigned</strong>: {{ detection.assigned_senior }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% if prior_wallet_tokens and prior_detections %}
+    <div class="panel">
+      <h2>Previous detections (same MSISDN / wallet)</h2>
+      <p class="muted">Matching wallet id(s): {{ prior_wallet_tokens | join(", ") }}</p>
+      <div class="scroll-x">
+        <table class="data js-sortable">
+          <thead>
+            <tr>
+              <th class="th-sortable" data-sort-col="0" data-sort-type="number">Detection id</th>
+              <th class="th-sortable" data-sort-col="1" data-sort-type="date" data-sort-default="desc">Created</th>
+              <th class="th-sortable" data-sort-col="2" data-sort-type="text">Scenario</th>
+              <th class="th-sortable" data-sort-col="3" data-sort-type="text">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for pid, pdt, psid, pstatus in prior_detections %}
+              <tr>
+                <td data-sort-value="{{ pid }}"><a href="/detections/{{ pid }}">{{ pid }}</a></td>
+                <td class="muted" data-sort-value="{{ pdt.isoformat() if pdt else '' }}">{{ pdt | shortdt }}</td>
+                <td data-sort-value="{{ psid }}">{{ scenario_labels.get(psid, psid) }}</td>
+                <td data-sort-value="{{ pstatus }}"><span class="badge badge-status-{{ pstatus }}">{{ status_labels.get(pstatus, pstatus) }}</span></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+  <div class="panel">
+    <h2>Metrics snapshot</h2>
+    <div class="scroll-x">
+      <table class="data">
+        <tbody>
+          {% for k, v in metrics_ordered %}
+            <tr>
+              <th style="width: 220px">{{ metric_key_labels.get(k, k) }}</th>
+              <td>
+                {% set kl = k|lower %}
+                {% if k == "ScenarioId" %}
+                  {{ scenario_labels.get(v|string, v) }}
+                {% elif kl == "txndate" or kl == "txnweek" %}
+                  {{ v|shortdt }}
+                {% elif ('amount' in kl) or (kl == 'credit') or (kl == 'debit') %}
+                  {{ v|amount0 }}
+                {% else %}
+                  {{ v }}
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Linked transactions ({{ tx_rows|length }})</h2>
+    {% if tx_rows %}
+      <div class="scroll-x">
+        <table class="data js-sortable">
+          <thead>
+            <tr>
+              <th class="th-sortable" data-sort-col="0" data-sort-type="number">#</th>
+              <th class="th-sortable" data-sort-col="1" data-sort-type="text">MSISDN</th>
+              <th class="th-sortable" data-sort-col="2" data-sort-type="text">CardId</th>
+              <th class="th-sortable" data-sort-col="3" data-sort-type="text">Card holder</th>
+              <th class="th-sortable" data-sort-col="4" data-sort-type="text">Bank</th>
+              <th class="th-sortable" data-sort-col="5" data-sort-type="number">Amount</th>
+              <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Date & time</th>
+              <th class="th-sortable" data-sort-col="7" data-sort-type="text">Approved</th>
+            </tr>
+          </thead>
+          {% set ns = namespace(total_amount=0.0) %}
+          <tbody>
+            {% for t in tx_rows %}
+              {% set p = t.payload %}
+              {% set bank = p.get("OPP_card.issuer.bank") %}
+              {% set holder = p.get("AccountHolder") %}
+              {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
+              {% set a = p.get("Amount") %}
+              {% if a is not none and a != "" %}
+                {% set ns.total_amount = ns.total_amount + (a|float) %}
+              {% endif %}
+              <tr>
+                <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
+                <td data-sort-value="{{ p.get('WalletId', '') }}">{{ p.get("WalletId", "") }}</td>
+                <td data-sort-value="{{ p.get('CardId', '') }}">{{ p.get("CardId", "") }}</td>
+                <td data-sort-value="{% if holder is not none and holder != '' %}{{ holder }}{% endif %}">{% if holder is not none and holder != "" %}{{ holder }}{% else %}—{% endif %}</td>
+                <td data-sort-value="{% if bank is not none and bank != '' %}{{ bank }}{% endif %}">{% if bank is not none and bank != "" %}{{ bank }}{% else %}—{% endif %}</td>
+                <td data-sort-value="{{ p.get('Amount', '') }}">{{ p.get("Amount")|amount0 }}</td>
+                <td data-sort-value="{% if ts_raw is not none %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
+                <td data-sort-value="{{ p.get('Approved', '') }}">{{ p.get("Approved", "") }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th colspan="5" style="text-align:right">Total</th>
+              <th>{{ ns.total_amount|amount0 }}</th>
+              <th colspan="2"></th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No linked rows (re-run scenarios after import if empty).</p>
+    {% endif %}
+    <div style="margin-top: 0.75rem; display:flex; justify-content:flex-end; gap:0.5rem; flex-wrap:wrap">
+      <button
+        type="button"
+        class="button secondary"
+        onclick="window.amlOpenTxPopup && window.amlOpenTxPopup({{ detection.import_batch_id }}, { msisdn: '{{ (metrics.get('WalletId','')|string)|e }}', card_id: '{{ (metrics.get('CardId','')|string)|e }}' })"
+      >See more transactions</button>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Notes</h2>
+    <ul id="notes-list" style="list-style: none; padding-left: 0">
+      {% for n in detection.notes %}
+        {% with note=n, detection_id=detection.id, can_edit=can_edit_notes %}
+          {% include "partials/note_row.html" %}
+        {% endwith %}
+      {% endfor %}
+    </ul>
+    <form
+      hx-post="/detections/{{ detection.id }}/notes"
+      hx-target="#notes-list"
+      hx-swap="afterbegin"
+      hx-on::after-request="if(event.detail.successful) this.reset()"
+    >
+      <label>Note
+        <textarea name="body" required></textarea>
+      </label>
+      <p class="muted">Author: {{ operator_display_name }}</p>
+      <p><button type="submit">Add note</button></p>
+    </form>
+  </div>
+  <details class="panel" style="padding: 0">
+    <summary style="padding: 1rem; cursor: pointer">
+      <strong>Status change log</strong>
+      <span class="muted">
+        {% if detection.status_history %} ({{ detection.status_history|length }}){% endif %}
+      </span>
+    </summary>
+    <div style="padding: 0 1rem 1rem 1rem">
+      {% if detection.status_history %}
+        <div class="scroll-x">
+          <table class="data js-sortable">
+            <thead>
+              <tr>
+                <th class="th-sortable" data-sort-col="0" data-sort-type="date" data-sort-default="desc">When</th>
+                <th class="th-sortable" data-sort-col="1" data-sort-type="text">From</th>
+                <th class="th-sortable" data-sort-col="2" data-sort-type="text">To</th>
+                <th class="th-sortable" data-sort-col="3" data-sort-type="text">Actor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for h in detection.status_history %}
+                <tr>
+                  <td class="muted" data-sort-value="{{ h.created_at.isoformat() if h.created_at else '' }}">{{ h.created_at | shortdt }}</td>
+                  <td data-sort-value="{{ h.from_status or '' }}">{{ status_labels.get(h.from_status, h.from_status) if h.from_status else "—" }}</td>
+                  <td data-sort-value="{{ h.to_status or '' }}">{{ status_labels.get(h.to_status, h.to_status) }}</td>
+                  <td data-sort-value="{{ h.actor_name or '' }}">{{ h.actor_name or "—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="muted">No status changes recorded yet.</p>
+      {% endif %}
+    </div>
+  </details>
+  <div class="panel">
+    <h2>Change status</h2>
+    <p class="muted">Final step: set the case status when investigation on this detection is complete.</p>
+    {% if allowed_statuses %}
+      <form class="inline" method="post" action="/detections/{{ detection.id }}/status" onsubmit="amlFormBusy(this)">
+        <label>New status
+          <select name="to_status" required>
+            {% for s in allowed_statuses %}
+              <option value="{{ s }}">{{ status_labels.get(s, s) }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="muted">Recorded as: {{ operator_display_name }}</p>
+        <div>
+          <button type="submit">Apply</button>
+          <span class="busy-hint" aria-live="polite">Updating status…</span>
+        </div>
+      </form>
+    {% else %}
+      <p class="muted">No further transitions (terminal state).</p>
+    {% endif %}
+  </div>
+
+  <div id="tx-popup-overlay" class="modal-overlay" hidden>
+    <div class="modal-card">
+      <div id="tx-popup-body" class="modal-body">
+        <div class="muted">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var overlay = document.getElementById("tx-popup-overlay");
+      var body = document.getElementById("tx-popup-body");
+      if (!overlay || !body) return;
+
+      function close() {
+        overlay.hidden = true;
+      }
+      function open(batchId, opts) {
+        overlay.hidden = false;
+        body.innerHTML = '<div class="muted">Loading…</div>';
+        var q = "";
+        try {
+          var params = new URLSearchParams();
+          params.set("per_page", "20");
+          params.set("page", "1");
+          if (opts && opts.msisdn) params.set("msisdn", String(opts.msisdn));
+          if (opts && opts.card_id) params.set("card_id", String(opts.card_id));
+          if (opts && opts.exclude_indices) params.set("exclude_indices", String(opts.exclude_indices));
+          q = "?" + params.toString();
+        } catch (e) {
+          // no-op
+        }
+        if (window.htmx) {
+          window.htmx.ajax("GET", "/imports/" + batchId + "/transactions" + q, { target: "#tx-popup-body" });
+        }
+      }
+      window.amlOpenTxPopup = open;
+      window.amlCloseTxPopup = close;
+
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) close();
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") close();
+      });
+
+      window.amlTxPage = function (n) {
+        var form = document.getElementById("tx-filter-form");
+        if (!form) return;
+        var pageInput = form.querySelector('input[name="page"]');
+        if (!pageInput) return;
+        pageInput.value = String(n);
+        form.requestSubmit();
+      };
+    })();
+  </script>
+{% endblock %}

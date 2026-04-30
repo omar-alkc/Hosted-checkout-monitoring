@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/scenarios">← Scenario Manager</a></p>
+  <h1>{{ scenario_id }} · {{ scenario_label }}</h1>
+  {% if shared_note %}
+    <p class="muted">{{ shared_note }}</p>
+  {% endif %}
+  <p class="muted">
+    Optional <strong>Monitored issuer</strong> limits this scenario to transactions whose card issuer bank
+    (<code>OPP_card.issuer.bank</code>) contains the given text, case-insensitive.
+    You can provide multiple values separated by <code>|</code>, e.g. <code>BankA|BankB</code>.
+    Leave blank to include all issuers.
+  </p>
+  <div class="panel">
+    <h2 style="margin-top: 0">Test scenario</h2>
+    <p class="muted">
+      Runs this scenario against an existing import batch and creates detections with status <strong>Test</strong>.
+      Test detections can be changed to <strong>New</strong> or deleted.
+    </p>
+    <form method="post" action="/scenarios/{{ scenario_id }}/test" onsubmit="amlFormBusy(this)">
+      <label>Import batch
+        <select name="batch_id" required>
+          <option value="">(pick batch)</option>
+          {% for b in ready_batches %}
+            <option value="{{ b.id }}">{{ b.id }} · {{ b.original_filename }} · {{ b.created_at | shortdt }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p>
+        <button type="submit" class="secondary">Test</button>
+        <span class="busy-hint" aria-live="polite">Running…</span>
+      </p>
+    </form>
+  </div>
+  <div class="panel">
+    <form method="post" action="/scenarios/{{ scenario_id }}" onsubmit="amlFormBusy(this)">
+      <label>Scenario status
+        <select id="scenario-status" name="scenario_status">
+          <option value="enabled" {% if scenario_enabled %}selected{% endif %}>Enabled</option>
+          <option value="disabled" {% if not scenario_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </label>
+      <label>Monitored issuer (substring)
+        <input type="text" name="monitored_bank" value="{{ monitored_bank_input }}" placeholder="e.g. BankName" autocomplete="off" />
+      </label>
+      {% for key, label in fields %}
+        <label>{{ label }}
+          <input
+            type="number"
+            name="{{ key }}"
+            value="{{ values.get(key, '') }}"
+            {% if 'amount' in key %}step="1"{% else %}step="1"{% endif %}
+            min="0"
+          />
+        </label>
+      {% endfor %}
+      {% if risk_fields %}
+        <div style="grid-column: 1 / -1; margin-top: 0.5rem">
+          <div class="panel" style="margin: 0; padding: 0.9rem 1rem">
+            <h3 style="margin-top: 0">High risk flag</h3>
+            <div class="muted" style="margin-bottom: 0.75rem">
+              Configure when detections for this scenario should be marked as high risk.
+            </div>
+            <div class="filters-grid">
+              {% for key, label in risk_fields %}
+                <label>{{ label }}
+                  <input
+                    type="number"
+                    name="{{ key }}"
+                    value="{{ values.get(key, '') }}"
+                    step="1"
+                    min="0"
+                  />
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      <p>
+        <button type="submit">Save</button>
+        <span class="busy-hint" aria-live="polite">Saving…</span>
+      </p>
+    </form>
+  </div>
+  <script>
+    (function () {
+      var sel = document.getElementById("scenario-status");
+      if (!sel) return;
+      var prev = sel.value;
+      sel.addEventListener("change", function () {
+        if (sel.value === "disabled" && prev !== "disabled") {
+          var ok = window.confirm("Disable this scenario? It will be skipped when running scenarios.");
+          if (!ok) {
+            sel.value = prev;
+            return;
+          }
+        }
+        prev = sel.value;
+      });
+    })();
+  </script>
+{% endblock %}

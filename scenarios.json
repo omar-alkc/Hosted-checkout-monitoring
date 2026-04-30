@@ -1,0 +1,14 @@
+{
+  "d_amount_min": "50000",
+  "d_total_amount_min": "500000",
+  "d1_min_txn": "3",
+  "d1_min_unique_cards": "3",
+  "d2_min_wallets": "3",
+  "d3_min_rejected": "5",
+  "w1_min_txn": "10",
+  "w1_min_unique_cards": "3",
+  "w1_min_total_amount": "500000",
+  "w2_min_wallets": "5",
+  "w2_min_total_amount": "500000",
+  "w3_min_rejected": "10"
+}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Imports</h1>
+  <div class="panel">
+    <h2>Upload Excel</h2>
+    <p class="muted">
+      Uses the same column rules as the desktop tool (see <code>io_utils.read_transactions_xlsx</code>).
+      The file must include a UniqueId column; values must be unique in the file and not already present in the system.
+    </p>
+    <form method="post" action="/imports" enctype="multipart/form-data" onsubmit="amlFormBusy(this)">
+      <label>File (.xlsx)
+        <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+      </label>
+      <p><button type="submit">Upload</button></p>
+    </form>
+  </div>
+  <div class="scroll-x panel">
+    <table class="data js-sortable">
+      <thead>
+        <tr>
+          <th class="th-sortable" data-sort-col="0" data-sort-type="number">ID</th>
+          <th class="th-sortable" data-sort-col="1" data-sort-type="text">File</th>
+          <th class="th-sortable" data-sort-col="2" data-sort-type="text">Status</th>
+          <th class="th-sortable" data-sort-col="3" data-sort-type="number">Rows</th>
+          <th class="th-sortable" data-sort-col="4" data-sort-type="date" data-sort-default="desc">Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in batches %}
+          <tr>
+            <td data-sort-value="{{ b.id }}"><a href="/imports/{{ b.id }}">{{ b.id }}</a></td>
+            <td data-sort-value="{{ b.original_filename }}">{{ b.original_filename }}</td>
+            <td data-sort-value="{{ b.status }}">{{ b.status }}</td>
+            <td data-sort-value="{{ b.row_count }}">{{ b.row_count }}</td>
+            <td class="muted" data-sort-value="{{ b.created_at.isoformat() if b.created_at else '' }}">{{ b.created_at | shortdt }}</td>
+          </tr>
+        {% endfor %}
+        {% if not batches %}
+          <tr>
+            <td colspan="5" class="muted">No imports yet.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

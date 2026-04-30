@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ settings.app_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}" />
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  </head>
+  <body>
+    {% set path_norm = (request.url.path.rstrip('/') or '/') %}
+    <header class="top{% if path_norm == '/login' %} top--login{% endif %}">
+      {% if path_norm != '/login' %}
+        <strong class="header-title">{{ settings.app_title }}</strong>
+      {% endif %}
+      <nav class="top-nav">
+        {% if current_user is defined and current_user %}
+          {% if current_user.role != 'admin' %}
+            <a href="/detections">Detections</a>
+          {% endif %}
+          {% if current_user.role == 'supervisor' %}
+            <a href="/imports">Imports</a>
+            <a href="/scenarios">Scenario Manager</a>
+            <a href="/transactions">Transactions explorer</a>
+          {% endif %}
+          {% if current_user.role == 'admin' %}
+            <a href="/admin/users">Users</a>
+          {% endif %}
+          <details class="nav-settings">
+            <summary class="nav-settings-summary">Settings</summary>
+            <div class="nav-settings-menu">
+              {% if current_user.role == 'supervisor' %}
+                <a href="/supervisor/investigator-policy">Investigator policy</a>
+              {% endif %}
+              <a href="/account/password">Password</a>
+            </div>
+          </details>
+          <div class="nav-session">
+            <span class="muted nav-user">{{ current_user.display_name or current_user.username }} · {{ current_user.role }}</span>
+            <form method="post" action="/logout" class="inline-form">
+              <button type="submit" class="button secondary">Log out</button>
+            </form>
+          </div>
+        {% endif %}
+      </nav>
+    </header>
+    <main>
+      {% set q = request.query_params %}
+      {% set notice = (q.get('notice') or '')|string %}
+      {% set error = (q.get('error') or '')|string %}
+      {% set saved = (q.get('saved') or '')|string %}
+
+      {% if error and error.strip() %}
+        <div class="error">{{ error }}</div>
+      {% endif %}
+      {% if saved == "1" %}
+        <div class="flash success">Saved.</div>
+      {% endif %}
+      {% set notices_handled_in_page = ("enrichment_retry",) %}
+      {% if notice and notice.strip() and notice not in notices_handled_in_page %}
+        {% set labels = {
+          "status_saved": "Detection status was updated.",
+          "bulk_status": "Bulk status applied.",
+          "test_created": "Test detections created.",
+          "test_deleted": "Test detections deleted.",
+          "scenarios_run": "Scenarios run completed.",
+          "logged_out": "You have been logged out.",
+          "user_created": "User created.",
+        } %}
+        {% if notice == "scenarios_run" %}
+          {% set n = (q.get('n') or '')|string %}
+          <div class="flash success">{{ labels.get(notice, notice) }}{% if n.strip() %} ({{ n }} detections created){% endif %}</div>
+        {% else %}
+          <div class="flash success">{{ labels.get(notice, notice) }}</div>
+        {% endif %}
+      {% endif %}
+
+      {% block content %}{% endblock %}
+    </main>
+    <div id="aml-loading-overlay" class="loading-overlay" hidden>
+      <div class="loading-card" role="status" aria-live="polite" aria-label="Loading">
+        <div class="spinner" aria-hidden="true"></div>
+        <div class="loading-text">Working…</div>
+      </div>
+    </div>
+    <script>
+      window.amlFormBusy = function (form) {
+        form.classList.add("is-busy");
+        var btn = form.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+        if (window.amlLoadingBegin) window.amlLoadingBegin();
+      };
+    </script>
+    <!-- scenario enable/disable handled in scenario_detail.html -->
+    <script>
+      (function () {
+        var overlay = document.getElementById("aml-loading-overlay");
+        if (!overlay) return;
+        var active = 0;
+        var safetyTimer = null;
+        function show() {
+          overlay.hidden = false;
+        }
+        function hide() {
+          overlay.hidden = true;
+        }
+        function begin() {
+          active++;
+          show();
+          if (safetyTimer) window.clearTimeout(safetyTimer);
+          // Safety: never block UI forever if a request aborts.
+          safetyTimer = window.setTimeout(function () {
+            active = 0;
+            hide();
+          }, 120000);
+        }
+        function end() {
+          active = Math.max(0, active - 1);
+          if (active === 0) hide();
+          if (active === 0 && safetyTimer) {
+            window.clearTimeout(safetyTimer);
+            safetyTimer = null;
+          }
+        }
+        window.amlLoadingBegin = begin;
+        window.amlLoadingEnd = end;
+
+        /** Reset the 45s safety hide so long jobs (e.g. enrichment retry) keep "Working…" until response. */
+        window.amlLoadingExtendForLongJob = function () {
+          if (safetyTimer) window.clearTimeout(safetyTimer);
+          safetyTimer = window.setTimeout(function () {
+            active = 0;
+            hide();
+          }, 600000);
+        };
+
+        // Show spinner for normal form submits
+        document.addEventListener(
+          "submit",
+          function (e) {
+            var form = e.target;
+            if (!form) return;
+            begin();
+          },
+          true
+        );
+
+        // HTMX requests
+        document.body.addEventListener("htmx:beforeRequest", begin);
+        document.body.addEventListener("htmx:afterRequest", end);
+        document.body.addEventListener("htmx:afterOnLoad", end);
+        document.body.addEventListener("htmx:responseError", end);
+        document.body.addEventListener("htmx:sendError", end);
+        document.body.addEventListener("htmx:timeout", end);
+        document.body.addEventListener("htmx:abort", end);
+
+        // Page restored from bfcache: ensure hidden.
+        window.addEventListener("pageshow", function () {
+          active = 0;
+          hide();
+        });
+      })();
+    </script>
+    <script src="{{ url_for('static', path='table-sort.js') }}" defer></script>
+  </body>
+</html>

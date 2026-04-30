@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/scenarios">← Scenario Manager</a></p>
+  <h1>Investigator status policy</h1>
+  <p class="muted">
+    Supervisors define which status transitions <strong>investigators</strong> may apply.
+    Each transition must still be valid in the global workflow; this list further restricts investigators (maker-checker).
+  </p>
+  {% if policy_saved %}
+    <div class="flash success">Policy saved.</div>
+  {% endif %}
+
+  <div class="panel">
+    <form method="post" action="/supervisor/investigator-policy" onsubmit="amlFormBusy(this)">
+      <div class="policy-edge-list">
+        {% for fs, ts in workflow_pairs %}
+          {% set key = fs ~ '|' ~ ts %}
+          <label class="policy-edge">
+            <input type="checkbox" name="edge" value="{{ fs }}|{{ ts }}" {% if key in policy_selected %}checked{% endif %} />
+            <span>{{ status_labels.get(fs, fs) }} → {{ status_labels.get(ts, ts) }}</span>
+          </label>
+        {% endfor %}
+      </div>
+      <p><button type="submit">Save policy</button></p>
+    </form>
+  </div>
+{% endblock %}

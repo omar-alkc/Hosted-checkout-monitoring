@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/detections">← Detections</a></p>
+  <h1>Scenario Manager</h1>
+  <div data-scenario-manager-alerts>
+  {% if flash_notice == "enrichment_retry" %}
+    {% if enrichment_failed and enrichment_failed > 0 %}
+      <div class="error">
+        Enrichment did not finish for <strong>{{ enrichment_failed }}</strong> detection(s)
+        (external MariaDB/MySQL unreachable, timeout, or risk lookup error). Rows may still lack wallet holder or risk.
+      </div>
+    {% endif %}
+    {% if enrichment_updated and enrichment_updated > 0 %}
+      <div class="flash success">
+        Successfully updated <strong>{{ enrichment_updated }}</strong> detection(s).
+        {% if enrichment_skipped %}<span class="muted">Skipped (no linked rows): {{ enrichment_skipped }}.</span>{% endif %}
+      </div>
+    {% elif enrichment_updated == 0 and enrichment_failed == 0 %}
+      <div class="flash success">
+        Nothing to update.
+        {% if enrichment_skipped %}<span class="muted">{{ enrichment_skipped }} detection(s) had no linked rows.</span>{% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+  </div>
+  <p class="muted">Configure thresholds and optional card-issuer filters per scenario. Values apply when you run scenarios from an import.</p>
+  <div class="scroll-x panel">
+    <table class="data js-sortable">
+      <thead>
+        <tr>
+          <th class="th-sortable" data-sort-col="0" data-sort-type="text" data-sort-default="asc">Code</th>
+          <th class="th-sortable" data-sort-col="1" data-sort-type="text">Scenario</th>
+          <th class="th-sortable" data-sort-col="2" data-sort-type="text">Status</th>
+          <th class="th-sortable" data-sort-col="3" data-sort-type="text">Monitored issuer (substring)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in scenario_rows %}
+          <tr>
+            <td data-sort-value="{{ r.id }}"><strong>{{ r.id }}</strong></td>
+            <td data-sort-value="{{ r.label }}">{{ r.label }}</td>
+            <td data-sort-value="{{ r.status }}"><span class="muted">{{ r.status }}</span></td>
+            <td class="muted" data-sort-value="{{ r.monitored or '' }}">{% if r.monitored %}{{ r.monitored }}{% else %}— (any issuer){% endif %}</td>
+            <td><a class="button secondary" href="/scenarios/{{ r.id }}">Configure</a></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h2 style="margin-top: 0">External database enrichment</h2>
+    <p class="muted">
+      Re-runs MariaDB wallet holder lookup and D1/D2 external risk for <strong>every</strong> detection that has linked transactions.
+      Detections without linked rows are skipped.
+    </p>
+    <form
+      method="post"
+      action="/scenarios/retry-external-enrichment"
+      onsubmit="amlScenarioRetryBegin(this); return true;"
+    >
+      <button type="submit" class="button">Retry risk calculation &amp; fetch wallet holder name</button>
+    </form>
+  </div>
+  <script>
+    (function () {
+      window.amlScenarioRetryBegin = function (form) {
+        try {
+          var box = document.querySelector("[data-scenario-manager-alerts]");
+          if (box) box.remove();
+          document.querySelectorAll("main > .error, main > .flash.success").forEach(function (el) {
+            el.remove();
+          });
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, "", "/scenarios");
+          }
+        } catch (e) {}
+        if (window.amlLoadingExtendForLongJob) window.amlLoadingExtendForLongJob();
+        if (window.amlFormBusy) window.amlFormBusy(form);
+      };
+    })();
+  </script>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>Transactions explorer</h1>
+  <div class="panel">
+    <p class="muted" style="margin-top:0">Search raw transactions in one import batch or across all batches.</p>
+    <form class="filters-grid" method="get" action="/transactions">
+      <input type="hidden" name="page" value="1" />
+      <label>MSISDN
+        <input type="text" name="msisdn" value="{{ msisdn_input }}" />
+      </label>
+      <label>CardId
+        <input type="text" name="card_id" value="{{ card_id_input }}" />
+      </label>
+      <label>Card holder name
+        <input type="text" name="account_holder" value="{{ account_holder_input }}" placeholder="Name" />
+      </label>
+      <label>Bank / company name
+        <input type="text" name="bank" value="{{ bank_input }}" />
+      </label>
+      <label>Amount min
+        <input type="number" name="amount_min" value="{{ amount_min_input }}" step="1" />
+      </label>
+      <label>Amount max
+        <input type="number" name="amount_max" value="{{ amount_max_input }}" step="1" />
+      </label>
+      <label>Date from
+        <input type="date" name="date_from" value="{{ date_from_input }}" />
+      </label>
+      <label>Time from
+        <input type="time" name="time_from" value="{{ time_from_input }}" step="60" />
+      </label>
+      <label>Date to
+        <input type="date" name="date_to" value="{{ date_to_input }}" />
+      </label>
+      <label>Time to
+        <input type="time" name="time_to" value="{{ time_to_input }}" step="60" />
+      </label>
+      <label>Approved
+        <select name="approved">
+          <option value="" {% if not approved_input %}selected{% endif %}>(any)</option>
+          <option value="true" {% if approved_input == 'true' %}selected{% endif %}>true</option>
+          <option value="false" {% if approved_input == 'false' %}selected{% endif %}>false</option>
+        </select>
+      </label>
+      <label>Rows
+        <select name="per_page">
+          {% for n in per_page_options %}
+            <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Import batch id
+        <input type="number" name="batch_id" value="{{ batch_id_input or '' }}" min="1" step="1" />
+      </label>
+      <div class="filter-actions">
+        <button type="submit" class="button">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="muted" style="display:flex; justify-content:space-between; align-items:center; margin-top:0">
+      <div>
+        Showing <strong>{{ rows|length }}</strong> of <strong>{{ total }}</strong> · page <strong>{{ page }}</strong>/<strong>{{ pages }}</strong>
+        {% if not batch_id_int %} · all batches{% endif %}
+      </div>
+      <div style="display:flex; gap:0.35rem; align-items:center">
+        <a class="button secondary" href="{{ page_url(1) }}" {% if page<=1 %}aria-disabled="true"{% endif %}>«</a>
+        <a class="button secondary" href="{{ page_url(page - 1) }}" {% if page<=1 %}aria-disabled="true"{% endif %}>‹</a>
+        <a class="button secondary" href="{{ page_url(page + 1) }}" {% if page>=pages %}aria-disabled="true"{% endif %}>›</a>
+        <a class="button secondary" href="{{ page_url(pages) }}" {% if page>=pages %}aria-disabled="true"{% endif %}>»</a>
+      </div>
+    </div>
+    {% include "partials/transactions_table.html" %}
+  </div>
+{% endblock %}
+
