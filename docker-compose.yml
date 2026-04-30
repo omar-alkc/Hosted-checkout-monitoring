@@ -4,11 +4,13 @@ services:
     container_name: aml_web_postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # Override in `.env`; must match DATABASE_URL whenever the app runs outside Compose.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: aml_web
     # Host port 15433 avoids collisions with another Postgres often bound to 5433/5434.
+    # Bind loopback only so Postgres is never reachable off the Docker host NIC.
     ports:
-      - "15433:5432"
+      - "127.0.0.1:15433:5432"
     volumes:
       - aml_web_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +26,7 @@ services:
       - "8000:8000"
     environment:
       # Overrides DATABASE_URL from env_file so the container talks to Postgres on the Compose network (`db`).
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/aml_web
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/aml_web
     env_file:
       - .env
     depends_on:
