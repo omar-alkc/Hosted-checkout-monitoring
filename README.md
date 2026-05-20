@@ -221,7 +221,7 @@ CREATE TABLE investigator_status_policy (
 
 Requires [Docker Compose](https://docs.docker.com/compose/) v2.
 
-1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose loads `**.env**` so values apply to containers (the **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db`** on the Compose network—you do not need to change that URL for Docker).
+1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose injects `**.env**` into the **web** container as environment variables (the file is not inside the image). The **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db`** on the Compose network—you do not need to change that URL for Docker. For the app to start, set a 32+ character `**SESSION_SECRET**` or `**ALLOW_INSECURE_DEV=true**` (dev stacks only; never use the latter in production).
 2. Build and start **Postgres** + **web**:
   ```bash
    docker compose up --build -d

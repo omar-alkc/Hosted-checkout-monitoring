@@ -19,6 +19,9 @@ services:
       timeout: 5s
       retries: 10
 
+  # Web loads host `.env` as process env (file is not baked into the image — see `.dockerignore`).
+  # Startup requires a 32+ char `SESSION_SECRET` or `ALLOW_INSECURE_DEV=true` (local/dev only; see `.env.example`).
+  # Optional: `FORWARDED_ALLOW_IPS` (default in `docker-entrypoint.sh` is 127.0.0.1,172.16.0.0/12).
   web:
     build: .
     container_name: card_cashin_web

@@ -1,4 +1,9 @@
 # Web UI + API (FastAPI). Uses scenario helpers at repo root (io_utils, scenarios, wallet_enrichment).
+#
+# Runtime config is injected by Compose / orchestrator (not copied from `.env` — see `.dockerignore`).
+# Required: DATABASE_URL, and either SESSION_SECRET (32+ chars) or ALLOW_INSECURE_DEV=true for dev only.
+# Entrypoint: `docker-entrypoint.sh` runs migrations then uvicorn with `--proxy-headers` and
+# `--forwarded-allow-ips` (override with env `FORWARDED_ALLOW_IPS`).
 FROM python:3.13-slim-bookworm
 
 WORKDIR /app
