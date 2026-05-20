@@ -34,6 +34,9 @@
   </div>
   <div class="panel">
     <form method="post" action="/scenarios/{{ scenario_id }}" onsubmit="amlFormBusy(this)">
+      <label>Scenario name
+        <input type="text" name="scenario_label" value="{{ scenario_label_input or '' }}" placeholder="Custom name (optional)" autocomplete="off" />
+      </label>
       <label>Scenario status
         <select id="scenario-status" name="scenario_status">
           <option value="enabled" {% if scenario_enabled %}selected{% endif %}>Enabled</option>

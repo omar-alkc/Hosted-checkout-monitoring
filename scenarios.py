@@ -4,10 +4,34 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
+import numpy as np
 import pandas as pd
 
 # Flattened payload column from Excel/JSON (see app templates detection_detail).
 ISSUER_BANK_COL = "OPP_card.issuer.bank"
+
+
+def _rolling_window_days(df: pd.DataFrame) -> int:
+    """Inclusive rolling lookback length (default 7). Set via ``df.attrs['rolling_window_days']`` on rolling runs."""
+    try:
+        n = int(df.attrs.get("rolling_window_days", 7))
+    except (TypeError, ValueError):
+        n = 7
+    return max(1, n)
+
+
+def _approved_amount_subset(amt: pd.Series, approved: pd.Series, wpos: list[int]) -> pd.Series:
+    """
+    Amounts at window positions where Approved is true.
+
+    Do not use ``amt.iloc[wpos][approved.iloc[wpos]]``: chained indexing can
+    mis-align indices and trigger large intermediate allocations on big frames.
+    """
+    if not wpos:
+        return pd.Series(dtype=np.float64)
+    a = np.asarray(amt.iloc[wpos], dtype=np.float64)
+    ok = np.asarray(approved.iloc[wpos], dtype=bool)
+    return pd.Series(a[ok])
 
 
 def _filter_by_monitored_bank(df: pd.DataFrame, bank_substr: str | None) -> pd.DataFrame:
@@ -227,7 +251,10 @@ def daily_d3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Data
 
 
 def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # Rolling 7-day window (per wallet): >= txn count AND >= unique cards AND total amount >= threshold
+    # Rolling N-day window (per wallet, default 7): thresholds may be met before N calendar days of history
+    # (e.g. after 4 days) — each transaction is evaluated on the window ending that day.
+    window_days = _rolling_window_days(df)
+    lookback = window_days - 1
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_w1)
 
@@ -283,8 +310,8 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            # Evict anything older than 7 days (rolling window is [t-6d, t], inclusive by day).
-            cutoff = t - pd.Timedelta(days=6)
+            # Evict outside rolling window [t - (N-1)d, t] inclusive by day.
+            cutoff = t - pd.Timedelta(days=lookback)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 old_ok = bool(approved.iat[old_pos])
@@ -321,7 +348,7 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
             ):
                 # Aggregate window stats
                 wpos = [x[0] for x in win]
-                wamt_ok = amt.iloc[wpos][approved.iloc[wpos]]
+                wamt_ok = _approved_amount_subset(amt, approved, wpos)
                 end_date = t.date()
                 det_rows.append(
                     {
@@ -360,7 +387,8 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
 
 def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # Rolling 7-day window (per card): >= distinct wallets AND total amount >= threshold
+    # Rolling N-day window (per card): >= distinct wallets AND total amount >= threshold
+    lookback = _rolling_window_days(df) - 1
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_w2)
     if base_all.empty:
@@ -410,7 +438,7 @@ def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            cutoff = t - pd.Timedelta(days=6)
+            cutoff = t - pd.Timedelta(days=lookback)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 old_ok = bool(approved.iat[old_pos])
@@ -446,7 +474,7 @@ def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
                 and total_amount >= p.w2_min_total_amount
             ):
                 wpos = [x[0] for x in win]
-                wamt_ok = amt.iloc[wpos][approved.iloc[wpos]]
+                wamt_ok = _approved_amount_subset(amt, approved, wpos)
                 end_date = t.date()
                 det_rows.append(
                     {
@@ -480,7 +508,8 @@ def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
 
 def weekly_w3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # Rolling 7-day window (per wallet): >= rejected attempts
+    # Rolling N-day window (per wallet): >= rejected attempts
+    lookback = _rolling_window_days(df) - 1
     base = df[df["Rejected"]].copy()
     base = _filter_by_monitored_bank(base, p.monitor_bank_w3)
     if base.empty:
@@ -520,7 +549,7 @@ def weekly_w3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            cutoff = t - pd.Timedelta(days=6)
+            cutoff = t - pd.Timedelta(days=lookback)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 if holder is not None:

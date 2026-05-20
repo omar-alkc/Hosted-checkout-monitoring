@@ -26,16 +26,16 @@ At a high level the stack is **browser clients → FastAPI → PostgreSQL**, wit
 | Piece                           | Role                                                                                                                                                                                                                 |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `**app.main`**                  | FastAPI app: session middleware (signed cookie sessions), static files under `/static`, routers mounted without an API prefix for HTML routes.                                                                       |
-| `**app.routers**`               | `**auth_routes**` (login, logout, password change), `**admin_routes**` (users), `**policy_routes**` (supervisor investigator policy), `**web**` (detections, imports, scenarios, transactions explorer, notes/HTMX). |
+| `**app.routers`**               | `**auth_routes**` (login, logout, password change), `**admin_routes**` (users), `**policy_routes**` (supervisor investigator policy), `**web**` (detections, imports, scenarios, transactions explorer, notes/HTMX). |
 | `**app.database` / SQLAlchemy** | Primary persistence: users, import batches, stored transaction rows (JSONB), detections, scenario/threshold config, notes, workflow policy, etc.                                                                     |
 | `**app.services`**              | Domain logic: imports, scenario execution (`scenario_run`), exports, enrichment retry, detections CRUD.                                                                                                              |
-| **Root modules**                | `**io_utils`** (Excel ingest, optional MariaDB reads), `**scenarios**`, `**wallet_enrichment**` — used by the web app’s import and scenario pipeline.                                                                |
+| **Root modules**                | `**io_utils`** (Excel ingest, optional MariaDB reads), `**scenarios`**, `**wallet_enrichment**` — used by the web app’s import and scenario pipeline.                                                                |
 
 
 **Deployment (Docker Compose)**
 
 - `**db`**: Postgres (application database).
-- `**web**`: Image built from `**Dockerfile**` — installs deps, copies `app/` and root helpers, runs `**alembic upgrade head**` then `**uvicorn app.main:app**` (`docker-entrypoint.sh`).
+- `**web`**: Image built from `**Dockerfile**` — installs deps, copies `app/` and root helpers, runs `**alembic upgrade head**` then `**uvicorn app.main:app**` (`docker-entrypoint.sh`).
 
 ```mermaid
 flowchart TB
@@ -66,7 +66,7 @@ flowchart TB
 
 | Source                   | What                                                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Excel `.xlsx`**        | Transaction feeds: validated by `**io_utils.read_transactions_xlsx**` (normalized headers; required columns such as `RequestTimestamp`, `Mobile`, `Bin`, `AccountNumberLast4`, `Credit`, `ReasonCode`, `TransactionId`). **Web uploads** also require `**UniqueId`** per row (deduplication vs existing data). Upload size is capped by `**MAX_UPLOAD_BYTES**` (see `.env.example`). |
+| **Excel `.xlsx`**        | Transaction feeds: validated by `**io_utils.read_transactions_xlsx**` (normalized headers; required columns such as `RequestTimestamp`, `Mobile`, `Bin`, `AccountNumberLast4`, `Credit`, `ReasonCode`, `TransactionId`). **Web uploads** also require `**UniqueId`** per row (deduplication vs existing data). Upload size is capped by `**MAX_UPLOAD_BYTES`** (see `.env.example`). |
 | **Environment / `.env`** | `**DATABASE_URL**` (Postgres), `**SESSION_SECRET**`, optional `**SESSION_***` timeouts, `**MINITRANS_HOST` / `MINITRANS_PORT` / `MINITRANS_USER` / `MINITRANS_PASSWORD` / `MINITRANS_DATABASE**` for enrichment, `**GOV_MAPPING_PATH**` optional Excel for city code → display name mapping.                                                                                         |
 | **HTTP**                 | Forms, filters, session cookie: HTML UI and supervisor export query parameters.                                                                                                                                                                                                                                                                                                      |
 
@@ -78,7 +78,7 @@ flowchart TB
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Browser**                | HTML pages (Jinja2), JSON for a few endpoints, `**/static`** assets, file download responses.                                                                                 |
 | **PostgreSQL**             | Normalized application state after import and scenario runs (detections, metrics, statuses, notes, etc.).                                                                     |
-| **Excel downloads**        | Supervisors can export filtered detections (`**/detections/export`**, built in `**app/services/detections_export.py**`).                                                      |
+| **Excel downloads**        | Supervisors can export filtered detections (`**/detections/export`**, built in `**app/services/detections_export.py`**).                                                      |
 | **Desktop folder**         | When using `**run.py`**, one workbook per scenario (e.g. `Scenario_D1_daily.xlsx` … `Scenario_W3_weekly.xlsx`) in the chosen output directory.                                |
 | **Optional MariaDB/MySQL** | Read-only queries for enrichment (e.g. wallet names, `minitrans_clone` patterns) when configured; if unavailable, scenarios can still run with reduced enrichment (see logs). |
 
@@ -87,11 +87,11 @@ flowchart TB
 
 ## Database DDL (PostgreSQL)
 
-**Canonical source:** schema changes live in `**alembic/versions/`**. On deploy, run `**alembic upgrade head**` (the Docker entrypoint does this before Uvicorn). The SQL below is a **reference snapshot** of the application tables after revision `**007_d1_d2_high_risk_thresholds`**—use it for documentation or manual review; avoid applying it over an existing database that is already migrated.
+**Canonical source:** schema changes live in `**alembic/versions/`**. On deploy, run `**alembic upgrade head`** (the Docker entrypoint does this before Uvicorn). The SQL below is a reference snapshot of the application tables after revision `**007_d1_d2_high_risk_thresholds**`—use it for documentation or manual review; avoid applying it over an existing database that is already migrated.
 
 **Seeds (not fully shown below):**
 
-- `**001_initial`** inserts the first `**scenario_config**` row (default thresholds).
+- `**001_initial`** inserts the first `**scenario_config`** row (default thresholds).
 - `**004_users_policy**` inserts `**investigator_status_policy**` row `**id = 1**` with a default `**allowed_map**`.
 
 ORM mapping: `**app/models.py**`.
@@ -221,16 +221,16 @@ CREATE TABLE investigator_status_policy (
 
 Requires [Docker Compose](https://docs.docker.com/compose/) v2.
 
-1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose loads `**.env**` so values apply to containers (the **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db**` on the Compose network—you do not need to change that URL for Docker).
+1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose loads `**.env**` so values apply to containers (the **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db`** on the Compose network—you do not need to change that URL for Docker).
 2. Build and start **Postgres** + **web**:
   ```bash
    docker compose up --build -d
   ```
 3. Open **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** (not https). `**/health`** returns `{"ok":true}` without requiring the DB.
 
-The database is reachable from the **Docker host** only, at `**127.0.0.1:15433`** (mapped to Postgres in the container so tools on the same machine can run `**alembic**`, GUI clients, `**pg_dump**`). It is **not** published on LAN/WAN interfaces—use an SSH tunnel from another host if you must connect remotely.
+The database is reachable from the **Docker host** only, at `**127.0.0.1:15433`** (mapped to Postgres in the container so tools on the same machine can run `**alembic`**, GUI clients, `**pg_dump**`). It is **not** published on LAN/WAN interfaces—use an SSH tunnel from another host if you must connect remotely.
 
-Optional: set `**POSTGRES_PASSWORD`** in `**.env**` (used by the `**db**` container and by the `**web**` service’s internal `**DATABASE_URL**`). If you set it, point a host-run app at `**postgresql://postgres:<same-password>@127.0.0.1:15433/aml_web**`.
+Optional: set `**POSTGRES_PASSWORD`** in `**.env`** (used by the `**db**` container and by the `**web**` service’s internal `**DATABASE_URL**`). If you set it, point a host-run app at `**postgresql://postgres:<same-password>@127.0.0.1:15433/aml_web**`.
 
 Stop and remove containers (data volume kept unless you add `-v`):
 
@@ -238,18 +238,33 @@ Stop and remove containers (data volume kept unless you add `-v`):
 docker compose down
 ```
 
-**Images:** `**Dockerfile`** builds the API from `**requirements.txt**`, runs `**alembic upgrade head**` on start, then **uvicorn** on port 8000.
+**Images:** `**Dockerfile`** builds the API from `**requirements.txt`**, runs `**alembic upgrade head**` on start, then **uvicorn** on port 8000.
 
 ### Postgres in Docker, app on the host (e.g. Ubuntu + Nginx/systemd)
 
 Use this when PostgreSQL should run in Compose but **Uvicorn** runs natively (Tailscale or public reverse proxy to `127.0.0.1:8000`), matching a single-server deployment:
 
-1. Copy **`.env.example`** to **`.env`**. Set **`SESSION_SECRET`**, and optionally **`POSTGRES_PASSWORD`**. For the app on the host, set **`DATABASE_URL=postgresql://postgres:<password>@127.0.0.1:15433/aml_web`** (same password as **`POSTGRES_PASSWORD`**, or omit both for the default **`postgres`** password *only in non-production*).
-2. Start **only** the database: **`docker compose up -d db`**. Wait until healthy (or run **`docker compose ps`**).
-3. Install Python deps (see [Local development](#local-development-no-docker-for-python)), then from the repo root run **`alembic upgrade head`** and **`python -m app.scripts.create_admin …`**
-4. Run the app: **`./start_app.sh`** or **`uvicorn app.main:app --host 127.0.0.1 --port 8000`** (or a **systemd** unit); put **Nginx**/Caddy in front for HTTPS and Tailscale/public access as needed.
+1. Copy `**.env.example`** to `**.env**`. Set `**SESSION_SECRET**`, and optionally `**POSTGRES_PASSWORD**`. For the app on the host, set `**DATABASE_URL=postgresql://postgres:<password>@127.0.0.1:15433/aml_web**` (same password as `**POSTGRES_PASSWORD**`, or omit both for the default `**postgres**` password *only in non-production*).
+2. Start **only** the database: `**docker compose up -d db*`*. Wait until healthy (or run `**docker compose ps**`).
+3. Install Python deps (see [Local development](#local-development-no-docker-for-python)), then from the repo root run `**alembic upgrade head**` and `**python -m app.scripts.create_admin …**`
+4. Run the app: `**./start_app.sh**` or `**uvicorn app.main:app --host 127.0.0.1 --port 8000**` (or a **systemd** unit); put **Nginx**/Caddy in front for HTTPS and Tailscale/public access as needed.
 
-Data lives in the Docker volume **`aml_web_pgdata`**; back it up with **`docker exec`** + **`pg_dump`** or a volume snapshot tool.
+Data lives in the Docker volume `**aml_web_pgdata`**; back it up with `**docker exec**` + `**pg_dump**` or a volume snapshot tool.
+
+### Production security checklist
+
+Before exposing the app beyond a trusted network:
+
+1. **Secrets** — Set a strong `SESSION_SECRET` (32+ random characters). Do **not** set `ALLOW_INSECURE_DEV` in production. Set `ENV=production` so the app refuses default session secrets and `postgres:postgres` database URLs.
+2. **HTTPS** — Terminate TLS at Nginx, Caddy, or a cloud load balancer. Set `SECURE_COOKIES=true` and consider `SESSION_SAME_SITE=strict`.
+3. **Sessions** — Recommended: `SESSION_IDLE_TIMEOUT_SECONDS=1800` (30 min), `SESSION_MAX_AGE_SECONDS=28800` (8 h).
+4. **Network** — Prefer binding Uvicorn to `127.0.0.1` and exposing only the reverse proxy. In Docker, restrict `FORWARDED_ALLOW_IPS` (see `.env.example`) so clients cannot spoof `X-Forwarded-*` headers.
+5. **Database** — Rotate `POSTGRES_PASSWORD`; keep Postgres on loopback (`127.0.0.1:15433`) as in Compose.
+6. **MariaDB enrichment** — If `MINITRANS_*` crosses an untrusted network, set `MINITRANS_SSL_CA` to your CA bundle path.
+7. **Repository** — Never commit `.env`, Excel transaction files (`*.xlsx`), or installers (`*.exe`). Enable GitHub secret scanning on the repo.
+8. **Admin bootstrap** — `python -m app.scripts.create_admin <user>` prompts for a password (avoid passing passwords on the CLI).
+
+Run smoke tests: `pip install -r requirements-dev.txt` then `python -m pytest tests/ -q`. CI runs the same checks plus `pip-audit` on dependencies.
 
 ---
 
@@ -263,13 +278,13 @@ Use **Python 3.13** (see `pyproject.toml` and `.python-version`).
 py -3.13 -m venv .venv
 ```
 
-Activate it, or use **`start_app.cmd`** (Windows) / **`./start_app.sh`** (Linux/macOS), which prefer **`.venv`** when present.
+Activate it, or use `**start_app.cmd**` (Windows) / `**./start_app.sh**` (Linux/macOS), which prefer `**.venv**` when present.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Copy **`.env.example`** to **`.env`**. For local runs, point Postgres at the mapped port:
+Copy `**.env.example**` to `**.env**`. For local runs, point Postgres at the mapped port and keep `ALLOW_INSECURE_DEV=true` until you set a real `SESSION_SECRET`:
 
 `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:15433/aml_web`
 
@@ -279,7 +294,7 @@ On Linux/macOS:
 python3.13 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 ```
 
-- **`run_setup.cmd`** (Windows) installs Python deps, starts **only** the **`db`** Compose service (not **`web`**), then runs **`alembic upgrade head`**. On Linux, run **`docker compose up -d db`** yourself, then **`alembic upgrade head`** from an activated **`.venv`**.
+- `**run_setup.cmd**` (Windows) installs Python deps, starts **only** the `**db`** Compose service (not `**web**`), then runs `**alembic upgrade head**`. On Linux, run `**docker compose up -d db**` yourself, then `**alembic upgrade head**` from an activated `**.venv**`.
 - If nothing is listening on **15433**, DB-backed routes return **500**.
 
 ### Web UI (local)
@@ -290,7 +305,7 @@ Windows (batch):
 start_app.cmd
 ```
 
-Linux / macOS (same behavior as **`start_app.cmd`**; `.cmd` files are Windows-only):
+Linux / macOS (same behavior as `**start_app.cmd**`; `.cmd` files are Windows-only):
 
 ```bash
 chmod +x start_app.sh

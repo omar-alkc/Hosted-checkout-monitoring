@@ -68,6 +68,8 @@ class ScenarioConfig(Base):
     w2_min_total_amount: Mapped[float] = mapped_column(Numeric(24, 6), nullable=False)
     w3_min_rejected: Mapped[int] = mapped_column(Integer, nullable=False)
     monitored_banks: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Optional override labels per scenario code, e.g. {"D1": "My label"}
+    scenario_labels: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Per-scenario on/off switch. Missing keys default to enabled.
     scenario_enabled: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -77,7 +79,13 @@ class Detection(Base):
     __tablename__ = "detections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    import_batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id", ondelete="CASCADE"), index=True)
+    import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("import_batches.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    # batch: per-import detections; rolling: detections computed across all imports in a time window.
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="batch", index=True)
+    scope_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scope_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scenario_id: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
     period: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="new", index=True)
@@ -87,7 +95,7 @@ class Detection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    batch: Mapped[ImportBatch] = relationship(back_populates="detections")
+    batch: Mapped[ImportBatch | None] = relationship(back_populates="detections")
     notes: Mapped[list[Note]] = relationship(
         back_populates="detection", cascade="all, delete-orphan", order_by="Note.created_at"
     )

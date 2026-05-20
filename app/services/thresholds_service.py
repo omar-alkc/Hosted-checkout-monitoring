@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models import ScenarioConfig
+from app.constants import SCENARIO_LABELS
 
 # Scenario codes stored in JSON and used by scenarios.py registry.
 SCENARIO_CODES: tuple[str, ...] = ("D1", "D2", "D3", "W1", "W2", "W3")
@@ -70,6 +71,53 @@ def scenario_enabled_normalized(raw: object) -> dict[str, bool]:
     return out
 
 
+def scenario_labels_normalized(raw: object) -> dict[str, str]:
+    """Map each scenario code to an optional custom label (missing/blank => no override)."""
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return out
+    for c in SCENARIO_CODES:
+        if c not in raw:
+            continue
+        v = raw.get(c)
+        if v is None:
+            continue
+        t = str(v).strip()
+        if t:
+            out[c] = t
+    return out
+
+
+def scenario_label_map(db: Session) -> dict[str, str]:
+    """Base labels merged with DB overrides (if present)."""
+    base = dict(SCENARIO_LABELS)
+    try:
+        row = get_or_create_scenario_config(db)
+        overrides = scenario_labels_normalized(getattr(row, "scenario_labels", None))
+        base.update(overrides)
+    except Exception:
+        pass
+    return base
+
+
+def set_scenario_label(db: Session, *, scenario_id: str, label: str | None) -> ScenarioConfig:
+    sid = scenario_id.strip().upper()
+    if sid not in SCENARIO_CODES:
+        raise ValueError("Invalid scenario id.")
+    row = get_or_create_scenario_config(db)
+    m = dict(getattr(row, "scenario_labels", {}) or {}) if isinstance(getattr(row, "scenario_labels", None), dict) else {}
+    lab = (label or "").strip()
+    if lab:
+        m[sid] = lab
+    else:
+        m.pop(sid, None)
+    row.scenario_labels = m
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def get_threshold_field_keys_for_scenario(scenario_id: str) -> list[str]:
     """Threshold column names that apply to this scenario (may overlap across scenarios)."""
     sid = scenario_id.strip().upper()
@@ -131,6 +179,7 @@ def get_or_create_scenario_config(db: Session) -> ScenarioConfig:
         w2_min_total_amount=500000,
         w3_min_rejected=10,
         monitored_banks={},
+        scenario_labels={},
     )
     db.add(row)
     db.commit()

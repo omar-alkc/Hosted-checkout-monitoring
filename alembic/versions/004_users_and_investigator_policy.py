@@ -21,8 +21,15 @@ depends_on = None
 
 
 _DEFAULT_POLICY = {
-    "new": ["false_positive_initial", "suspicious_initial", "pending_evidence"],
-    "pending_evidence": ["new", "false_positive_initial", "suspicious_initial"],
+    "new": ["false_positive_initial", "suspicious_initial", "pending_evidence", "investigation_consolidate"],
+    "pending_evidence": ["new", "false_positive_initial", "suspicious_initial", "investigation_consolidate"],
+    "investigation_consolidate": [
+        "false_positive_initial",
+        "suspicious_initial",
+        "false_positive_final",
+        "suspicious_final",
+        "pending_evidence",
+    ],
 }
 
 

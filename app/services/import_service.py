@@ -93,21 +93,38 @@ def _filter_importable_transaction_rows(
 
 def parse_upload_to_batch(db: Session, *, filename: str, file_bytes: bytes) -> ImportBatch:
     _ensure_repo_on_path()
-    from io_utils import add_helper_columns, read_transactions_xlsx
+    from io_utils import add_helper_columns, read_transactions_csv, read_transactions_xlsx
 
     tmp_path: Path | None = None
     parsed: list[tuple[int, dict, str]] | None = None
     err: str | None = None
     skipped_dup = 0
     skipped_existing = 0
+    skipped_paymenttype = 0
     try:
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        ext = str(Path(filename).suffix or "").lower()
+        suffix = ".csv" if ext == ".csv" else ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = Path(tmp.name)
-        df_raw, spec, _ = read_transactions_xlsx(tmp_path)
+        if suffix == ".csv":
+            df_raw, spec, _ = read_transactions_csv(tmp_path)
+        else:
+            df_raw, spec, _ = read_transactions_xlsx(tmp_path)
         df_raw = df_raw.copy()
         df_raw.insert(0, "_aml_row_index", range(len(df_raw)))
         df_helpers = add_helper_columns(df_raw, spec)
+        pt_col = str(getattr(spec, "payment_type", "PaymentType") or "PaymentType")
+        if pt_col not in df_helpers.columns:
+            raise ValueError(
+                "Missing required column: PaymentType (required for web imports; only PaymentType=DB rows are stored)."
+            )
+        before_n = int(len(df_helpers))
+        pt_norm = df_helpers[pt_col].astype(str).fillna("").map(lambda s: str(s).strip().upper())
+        df_helpers = df_helpers.loc[pt_norm.eq("DB")].copy()
+        skipped_paymenttype = max(0, before_n - int(len(df_helpers)))
+        if df_helpers.empty:
+            raise ValueError("No rows with PaymentType=DB to import.")
         parsed = []
         for rec in df_helpers.to_dict(orient="records"):
             idx = int(rec.pop("_aml_row_index"))
@@ -140,6 +157,8 @@ def parse_upload_to_batch(db: Session, *, filename: str, file_bytes: bytes) -> I
     else:
         batch.status = ImportBatchStatus.ready.value
         warn_parts: list[str] = []
+        if skipped_paymenttype:
+            warn_parts.append(f"Skipped {skipped_paymenttype} non-DB PaymentType row(s).")
         if skipped_dup:
             warn_parts.append(f"Skipped {skipped_dup} duplicate UniqueId row(s) inside the file.")
         if skipped_existing:
@@ -257,10 +276,99 @@ def dataframe_for_batch(db: Session, batch_id: int) -> pd.DataFrame:
     return df
 
 
+def dataframe_for_rolling_window(
+    db: Session,
+    *,
+    days: int,
+    as_of_iso: str | None = None,
+    period_start_iso: str | None = None,
+    period_end_iso: str | None = None,
+) -> pd.DataFrame:
+    """
+    Load transaction_rows across all import batches within a trailing window (best-effort).
+
+    - We filter using ISO-string comparisons on payload timestamps, similar to search_transactions_for_batch().
+    - Adds helper columns the same way as dataframe_for_batch(), plus:
+        _aml_import_batch_id, _aml_transaction_row_id
+
+    Without period bounds: trailing ``days`` ending at ``now()`` or at ``as_of_iso`` when set.
+
+    With both ``period_start_iso`` and ``period_end_iso`` (timestamptz ISO strings, UTC):
+    intersect [period_start, period_end] with the last ``days`` before min(period_end, now()) — i.e.
+    ``ts >= greatest(period_start, anchor - days)`` and ``ts <= anchor`` where anchor = least(period_end, now()).
+    When ``as_of_iso`` is also set, period mode takes precedence for the WHERE clause.
+    """
+    try:
+        d = int(days)
+    except Exception:
+        d = 0
+    if d <= 0:
+        return pd.DataFrame()
+
+    ts_expr = "coalesce(transaction_rows.payload->>'TxnTimestamp', transaction_rows.payload->>'RequestTimestamp', transaction_rows.payload->>'TxnDate', '')"
+    # Cast ISO-like strings to timestamptz for comparisons (payload values are written as isoformat strings).
+    ts_cast = f"NULLIF({ts_expr}, '')::timestamptz"
+    params: dict[str, object] = {"days": d}
+    ps = str(period_start_iso or "").strip()
+    pe = str(period_end_iso or "").strip()
+    if ps and pe:
+        params["pstart"] = ps
+        params["pend"] = pe
+        # Use CAST(... AS timestamptz), not :bind::timestamptz — SQLAlchemy text() treats :name as binds
+        # and misparses PostgreSQL's :: cast when it immediately follows a bind name.
+        anchor = "least(CAST(:pend AS timestamptz), now())"
+        where_sql = (
+            f"{ts_cast} >= greatest(CAST(:pstart AS timestamptz), {anchor} - make_interval(days => :days)) "
+            f"AND {ts_cast} <= {anchor}"
+        )
+    elif as_of_iso and str(as_of_iso).strip():
+        params["asof"] = str(as_of_iso).strip()
+        where_sql = (
+            f"{ts_cast} >= (CAST(:asof AS timestamptz) - make_interval(days => :days)) "
+            f"AND {ts_cast} <= CAST(:asof AS timestamptz)"
+        )
+    else:
+        where_sql = f"{ts_cast} >= (now() - make_interval(days => :days)) AND {ts_cast} <= now()"
+
+    ids_stmt = text(
+        f"""
+        SELECT id
+        FROM transaction_rows
+        WHERE {where_sql}
+        ORDER BY id ASC
+        """
+    )
+    ids = [int(r[0]) for r in db.execute(ids_stmt, params).all()]
+    if not ids:
+        return pd.DataFrame()
+    rows = db.query(TransactionRow).filter(TransactionRow.id.in_(ids)).all()
+    by_id = {r.id: r for r in rows}
+    ordered = [by_id[i] for i in ids if i in by_id]
+    data: list[dict] = []
+    for r in ordered:
+        row = dict(r.payload)
+        row["_aml_row_index"] = r.row_index
+        row["_aml_import_batch_id"] = r.import_batch_id
+        row["_aml_transaction_row_id"] = r.id
+        data.append(row)
+    df = pd.DataFrame(data)
+    if "TxnTimestamp" in df.columns:
+        df["TxnTimestamp"] = pd.to_datetime(df["TxnTimestamp"], errors="coerce")
+    if "TxnDate" in df.columns:
+        df["TxnDate"] = pd.to_datetime(df["TxnDate"], errors="coerce").dt.date
+    if "TxnWeek" in df.columns:
+        df["TxnWeek"] = pd.to_datetime(df["TxnWeek"], errors="coerce").dt.date
+    for col in ("Approved", "Rejected"):
+        if col in df.columns:
+            df[col] = df[col].astype(bool)
+    return df
+
+
 def search_transactions_for_batch(
     db: Session,
     *,
     batch_id: int | None = None,
+    unique_id: str | None = None,
     msisdn: str | None = None,
     card_id: str | None = None,
     account_holder: str | None = None,
@@ -291,6 +399,14 @@ def search_transactions_for_batch(
         params[key] = f"%{v}%"
         where.append(f"{field_expr} ILIKE :{key}")
 
+    if unique_id:
+        v = _strip_like_metachars(unique_id.strip())
+        if v:
+            params["uid"] = f"%{v}%"
+            where.append(
+                "(transaction_rows.transaction_external_id ILIKE :uid "
+                "OR transaction_rows.payload->>'UniqueId' ILIKE :uid)"
+            )
     if msisdn:
         add_like("(transaction_rows.payload->>'WalletId')", msisdn, "ms")
     if card_id:

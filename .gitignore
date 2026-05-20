@@ -13,3 +13,6 @@ build/
 .env.*.backup
 .env.aml_web_backup
 *.log
+*.exe
+*.xlsx
+*.docx

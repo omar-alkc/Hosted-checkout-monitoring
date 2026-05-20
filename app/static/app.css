@@ -303,11 +303,36 @@ table.data tr:nth-child(even) td {
   border-color: #854d0e;
 }
 
+.badge.badge-status-investigation_consolidate {
+  background: rgba(91, 140, 255, 0.18);
+  color: #bfdbfe;
+  border-color: #1e3a8a;
+}
+
 .badge.badge-status-suspicious_initial,
 .badge.badge-status-suspicious_final {
   background: rgba(248, 113, 113, 0.14);
   color: #fecaca;
   border-color: #991b1b;
+}
+
+.metric-name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.metric-name-chip {
+  display: inline-block;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(245, 165, 36, 0.22);
+  color: #fde68a;
+  border: 1px solid rgba(245, 165, 36, 0.45);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 form.inline {

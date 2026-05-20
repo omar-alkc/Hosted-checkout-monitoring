@@ -62,6 +62,29 @@
       <button type="submit" class="button">Retry risk calculation &amp; fetch wallet holder name</button>
     </form>
   </div>
+  <div class="panel">
+    <h2 style="margin-top: 0">Rolling weekly run</h2>
+    <p class="muted">
+      Runs weekly scenarios across <strong>all imports</strong> using a trailing <strong>N-day</strong> window (default 7).
+      Optionally set a date range: the N-day window ends on the end date (capped to now if that date is in the future),
+      and only transactions inside both the range and those N days are included.
+    </p>
+    <form method="post" action="/scenarios/run-rolling" onsubmit="amlFormBusy(this)">
+      <label>Window days
+        <input type="number" name="days" value="7" min="1" max="365" step="1" />
+      </label>
+      <label style="display: block; margin-top: 0.75rem">Period start (optional)
+        <input type="date" name="date_from" />
+      </label>
+      <label style="display: block; margin-top: 0.5rem">Period end (optional)
+        <input type="date" name="date_to" />
+      </label>
+      <p class="muted" style="margin-top: 0.5rem; font-size: 0.9rem">
+        Leave both dates empty for a trailing window ending at the current time. If both are set, the period may be up to 365 days.
+      </p>
+      <p><button type="submit" class="button">Run rolling weekly</button></p>
+    </form>
+  </div>
   <script>
     (function () {
       window.amlScenarioRetryBegin = function (form) {

@@ -2,13 +2,30 @@
 {% block content %}
   <h1>Detections</h1>
   {% if flash_notice == "bulk_status" %}
-    <div class="flash success">Bulk status: applied {{ bulk_applied or 0 }}, skipped {{ bulk_skipped or 0 }} (invalid transition or missing id).</div>
+    <div class="flash success">Bulk status: applied {{ bulk_applied or 0 }}, skipped {{ bulk_skipped or 0 }} {% if bulk_error %} — {{ bulk_error }}{% else %} (invalid transition or not selected).{% endif %}</div>
   {% endif %}
   <div class="panel">
     <form class="filters-grid" method="get" action="/detections">
       <input type="hidden" name="page" value="1" />
+      <label>Work queue
+        <select name="queue" title="Open, closed, initial review, or test-only">
+          <option value="">(any)</option>
+          <option value="open" {% if queue_filter == 'open' %}selected{% endif %}>Open</option>
+          <option value="closed" {% if queue_filter == 'closed' %}selected{% endif %}>Closed</option>
+          <option value="initial" {% if queue_filter == 'initial' %}selected{% endif %}>Initial review</option>
+          <option value="test" {% if queue_filter == 'test' %}selected{% endif %}>Test only</option>
+        </select>
+      </label>
+      <label>Assigned to
+        <select name="assigned">
+          <option value="">(any)</option>
+          {% for val, lab in assignee_options %}
+            <option value="{{ val }}" {% if assigned_filter == val %}selected{% endif %}>{{ lab }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <label>Status
-        <select name="status">
+        <select name="status" title="Exact status; overrides Work queue when set">
           <option value="">(any)</option>
           {% for k, lab in status_labels.items() %}
             <option value="{{ k }}" {% if status_filter == k %}selected{% endif %}>{{ lab }}</option>
@@ -33,6 +50,13 @@
       <label>Import batch id
         <input type="number" name="batch_id" value="{{ batch_filter or '' }}" min="1" step="1" />
       </label>
+      <label>Scope
+        <select name="scope">
+          <option value="">(any)</option>
+          <option value="batch" {% if scope_filter == 'batch' %}selected{% endif %}>Batch</option>
+          <option value="rolling" {% if scope_filter == 'rolling' %}selected{% endif %}>Rolling</option>
+        </select>
+      </label>
       <label>From date
         <input type="date" name="date_from" value="{{ date_from_input or '' }}" />
       </label>
@@ -50,11 +74,16 @@
         <a class="button secondary" href="/detections">Reset</a>
         {% if show_export %}
           <a class="button secondary filter-export" href="/detections/export{% if export_query %}?{{ export_query }}{% endif %}">Export .xlsx</a>
-          <span class="muted filter-actions-note">Export uses the filters above.</span>
+          <span class="muted filter-actions-note">Export uses the filters above. Initial review + Assigned to shows pending supervisor triage per employee.</span>
+        {% else %}
+          <span class="muted filter-actions-note">Initial review + Assigned to shows pending supervisor triage per employee.</span>
         {% endif %}
       </div>
     </form>
   </div>
+  {% if show_bulk %}
+  <form id="det-bulk-form" method="post" action="/detections/bulk-status" onsubmit="amlFormBusy(this)">
+  {% endif %}
     <div class="scroll-x panel">
       <table class="data js-sortable">
         <thead>
@@ -65,33 +94,39 @@
             </th>
             <th class="th-sortable" data-sort-col="1" data-sort-type="number">ID</th>
             <th class="th-sortable" data-sort-col="2" data-sort-type="text">Scenario</th>
-            <th class="th-sortable" data-sort-col="3" data-sort-type="number">Previous detection count</th>
-            <th class="th-sortable" data-sort-col="4" data-sort-type="text">Risk</th>
-            <th class="th-sortable" data-sort-col="5" data-sort-type="text">Status</th>
-            <th class="th-sortable" data-sort-col="6" data-sort-type="date">Created at</th>
-            <th class="th-sortable" data-sort-col="7" data-sort-type="date" data-sort-default="desc">Updated</th>
+            <th class="th-sortable" data-sort-col="3" data-sort-type="text">MSISDN</th>
+            <th class="th-sortable" data-sort-col="4" data-sort-type="number">Previous detection count</th>
+            <th class="th-sortable" data-sort-col="5" data-sort-type="text">Risk</th>
+            <th class="th-sortable" data-sort-col="6" data-sort-type="text">Status</th>
+            <th class="th-sortable" data-sort-col="7" data-sort-type="text">Assigned to</th>
+            <th class="th-sortable" data-sort-col="8" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="9" data-sort-type="date" data-sort-default="desc">Updated</th>
           </tr>
           {% else %}
           <tr>
             <th class="th-sortable" data-sort-col="0" data-sort-type="number">ID</th>
             <th class="th-sortable" data-sort-col="1" data-sort-type="text">Scenario</th>
-            <th class="th-sortable" data-sort-col="2" data-sort-type="number">Previous detection count</th>
-            <th class="th-sortable" data-sort-col="3" data-sort-type="text">Risk</th>
-            <th class="th-sortable" data-sort-col="4" data-sort-type="text">Status</th>
-            <th class="th-sortable" data-sort-col="5" data-sort-type="date">Created at</th>
-            <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Updated</th>
+            <th class="th-sortable" data-sort-col="2" data-sort-type="text">MSISDN</th>
+            <th class="th-sortable" data-sort-col="3" data-sort-type="number">Previous detection count</th>
+            <th class="th-sortable" data-sort-col="4" data-sort-type="text">Risk</th>
+            <th class="th-sortable" data-sort-col="5" data-sort-type="text">Status</th>
+            <th class="th-sortable" data-sort-col="6" data-sort-type="text">Assigned to</th>
+            <th class="th-sortable" data-sort-col="7" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="8" data-sort-type="date" data-sort-default="desc">Updated</th>
           </tr>
           {% endif %}
         </thead>
         <tbody>
           {% for d in detections %}
+            {% set _m = d.metrics or {} %}
+            {% set _sid_r = (d.scenario_id or "")|string|trim|upper %}
+            {% set _msisdn_cell = d.metrics | format_detection_msisdn(d.scenario_id) %}
             <tr>
-              {% if show_bulk %}<td><input type="checkbox" name="ids" value="{{ d.id }}" form="det-bulk-form" /></td>{% endif %}
+              {% if show_bulk %}<td><input type="checkbox" name="ids" value="{{ d.id }}" /></td>{% endif %}
               <td data-sort-value="{{ d.id }}"><a href="/detections/{{ d.id }}">{{ d.id }}</a></td>
               <td data-sort-value="{{ d.scenario_id }}" title="{{ d.scenario_id }}">{{ scenario_labels.get(d.scenario_id, d.scenario_id) }}</td>
+              <td data-sort-value="{{ _msisdn_cell }}" title="{{ _msisdn_cell }}">{{ _msisdn_cell }}</td>
               <td data-sort-value="{{ previous_counts.get(d.id, 0) }}">{{ previous_counts.get(d.id, 0) }}</td>
-              {% set _m = d.metrics or {} %}
-              {% set _sid_r = (d.scenario_id or "")|string|trim|upper %}
               {% set _risk_cell = "" %}
               {% if _sid_r in ["D1", "D2"] %}
                 {% if not _m.get("RiskError") and _m.get("Risk") is not none %}
@@ -102,11 +137,19 @@
               <td data-sort-value="{{ d.status }}">
                 <span class="badge badge-status-{{ d.status }}">{{ status_labels.get(d.status, d.status) }}</span>
               </td>
-              <td class="muted" data-sort-value="{% if d.batch %}{{ d.batch.created_at.isoformat() }}{% endif %}">
-                {% if d.batch %}
-                  {% if show_import_links %}<a href="/imports/{{ d.import_batch_id }}">{{ d.batch.created_at | shortdt }}</a>{% else %}{{ d.batch.created_at | shortdt }}{% endif %}
+              <td data-sort-value="{{ d.assigned_senior or '' }}">{{ d.assigned_senior or "—" }}</td>
+              {% set _scope = (d.scope_type or 'batch')|string|trim|lower %}
+              {% set _when = "" %}
+              {% if _scope == "rolling" %}
+                {% set _when = (_m.get("TxnWeek") or _m.get("TxnDate") or "") | string %}
+              {% else %}
+                {% if d.created_at %}{% set _when = d.created_at.isoformat() %}{% endif %}
+              {% endif %}
+              <td class="muted" data-sort-value="{{ _when }}">
+                {% if _scope == "rolling" %}
+                  {{ _when }}
                 {% else %}
-                  {% if show_import_links %}<a href="/imports/{{ d.import_batch_id }}">#{{ d.import_batch_id }}</a>{% else %}#{{ d.import_batch_id }}{% endif %}
+                  {{ d.created_at | shortdt }}
                 {% endif %}
               </td>
               <td class="muted" data-sort-value="{{ d.updated_at.isoformat() if d.updated_at else '' }}">{{ d.updated_at | shortdt }}</td>
@@ -114,7 +157,7 @@
           {% endfor %}
           {% if not detections %}
             <tr>
-              <td colspan="{% if show_bulk %}8{% else %}7{% endif %}" class="muted">No detections yet. Upload transactions, run scenarios from Imports.</td>
+              <td colspan="{% if show_bulk %}10{% else %}9{% endif %}" class="muted">No detections yet. Upload transactions, run scenarios from Imports.</td>
             </tr>
           {% endif %}
         </tbody>
@@ -143,10 +186,9 @@
       </div>
     </div>
   {% if show_bulk %}
-  <form id="det-bulk-form" method="post">
     <div class="panel">
       <h2 style="margin-top: 0">Bulk actions</h2>
-      <p class="muted">Select rows, then set status. Status changes skip rows where the transition is not allowed.</p>
+      <p class="muted">Select rows in the table above, choose a status, then Apply.{% if not show_bulk_delete_test %} Allowed transitions follow investigator policy.{% endif %}</p>
       <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end">
         <label>New status
           <select name="to_status">
@@ -155,8 +197,10 @@
             {% endfor %}
           </select>
         </label>
-        <button type="submit" formaction="/detections/bulk-status" formmethod="post" onclick="amlFormBusy(this.form)">Apply status</button>
-        <button type="submit" class="secondary" formaction="/detections/bulk-delete-test" formmethod="post" onclick="amlFormBusy(this.form)">Delete test</button>
+        <button type="submit">Apply status</button>
+        {% if show_bulk_delete_test %}
+        <button type="submit" class="secondary" formaction="/detections/bulk-delete-test" formmethod="post">Delete test</button>
+        {% endif %}
       </div>
     </div>
   </form>
@@ -167,7 +211,7 @@
       var all = document.getElementById("det-select-all");
       if (!all) return;
       all.addEventListener("change", function () {
-        document.querySelectorAll('input[name="ids"][form="det-bulk-form"]').forEach(function (cb) {
+        document.querySelectorAll('#det-bulk-form input[name="ids"]').forEach(function (cb) {
           cb.checked = all.checked;
         });
       });

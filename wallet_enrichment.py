@@ -114,9 +114,8 @@ def enrich_detection_metrics_dataframe(
     city_map: Dict[str, str] = dict(zip(prof["msisdn"].astype(str), prof["CityName"].astype(str)))
 
     if "WalletId" in det.columns:
-        det["WalletHolderName"] = det["WalletId"].astype(str).map(name_map).fillna("")
+        det["WalletHolderFullName"] = det["WalletId"].astype(str).map(name_map).fillna("")
         det["WalletCityName"] = det["WalletId"].astype(str).map(city_map).fillna("")
-        det["WalletHolderFullName"] = det["WalletHolderName"].fillna("")
     elif "WalletIdsPipe" in det.columns:
 
         def map_pipe(s: str, m: Dict[str, str]) -> str:

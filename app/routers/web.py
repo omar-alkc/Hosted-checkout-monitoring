@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
@@ -15,6 +13,7 @@ from app.deps.auth import require_supervisor, require_supervisor_or_investigator
 from app.models import Detection, ImportBatch, ImportBatchStatus, User
 from app.services.policy_service import investigator_effective_targets
 from app.template_ctx import operator_display_name, template_ctx as _ctx
+from app.templating import templates
 from app.services.detections_export import build_detections_export_workbook
 from app.services.detections_service import (
     add_note,
@@ -25,6 +24,7 @@ from app.services.detections_service import (
     delete_note,
     force_set_status,
     get_note,
+    list_assignee_options,
     list_detections_with_previous_count,
     ordered_detection_metric_items,
     prior_detections_for_wallet_tokens,
@@ -33,22 +33,23 @@ from app.services.detections_service import (
     wallet_tokens_for_prior_lookup,
 )
 from app.services.import_service import parse_upload_to_batch, search_transactions_for_batch
+from app.services.note_permissions import can_modify_note
 from app.services.external_enrichment_retry import retry_wallet_and_risk_enrichment
-from app.services.scenario_run import metrics_row, run_scenarios_for_batch, run_single_scenario_for_batch
+from app.services.scenario_run import metrics_row, run_scenarios_for_batch, run_scenarios_for_rolling, run_single_scenario_for_batch
 from app.services.thresholds_service import (
     SCENARIO_CODES,
     get_or_create_scenario_config,
     get_threshold_fields_for_scenario,
     monitored_bank_for_scenario,
+    scenario_label_map,
     scenario_enabled_normalized,
     set_scenario_enabled,
+    set_scenario_label,
     update_scenario_config,
     update_scenario_partial,
 )
 
 router = APIRouter()
-TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 def _safe_int(s: str | None, default: int) -> int:
@@ -56,43 +57,6 @@ def _safe_int(s: str | None, default: int) -> int:
         return int(str(s).strip())
     except Exception:
         return default
-
-
-def _amount0_filter(value: object) -> str:
-    """Whole-number money style: thousands separators, no decimals."""
-    if value is None or value == "":
-        return "—"
-    if isinstance(value, bool):
-        return str(value).lower()
-    try:
-        n = int(round(float(value)))
-        return f"{n:,}"
-    except (ValueError, TypeError, OverflowError):
-        return str(value)
-
-
-templates.env.filters["amount0"] = _amount0_filter
-
-
-def _short_dt_filter(value: object) -> str:
-    """Format as YYYY-MM-DD HH:MM (no sub-second)."""
-    if value is None:
-        return ""
-    if hasattr(value, "strftime"):
-        try:
-            return value.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, OSError):
-            pass
-    s = str(value).strip()
-    if len(s) >= 16 and s[4] == "-" and s[7] == "-":
-        if s[10] == "T":
-            return f"{s[:10]} {s[11:16]}"
-        if s[10] == " ":
-            return s[:16]
-    return s
-
-
-templates.env.filters["shortdt"] = _short_dt_filter
 
 
 def _is_htmx(request: Request) -> bool:
@@ -143,9 +107,12 @@ def detections_list(
     user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
     status: str | None = None,
+    queue: str | None = Query(None),
+    assigned: str | None = Query(None),
     scenario_id: str | None = None,
     risk: str | None = Query(None),
     batch_id: str | None = Query(None),
+    scope: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     detection_id: str | None = Query(None),
@@ -156,13 +123,19 @@ def detections_list(
     bulk_n: int | None = Query(None),
     bulk_applied: int | None = Query(None),
     bulk_skipped: int | None = Query(None),
+    bulk_error: str | None = Query(None),
 ):
     status = (status or "").strip() or None
+    queue_in = (queue or "").strip().lower() or None
+    if queue_in and queue_in not in ("open", "closed", "initial", "test"):
+        queue_in = None
+    assigned_in = (assigned or "").strip() or None
     scenario_id = (scenario_id or "").strip() or None
     risk_raw = (risk or "").strip().lower()
     risk_q = risk_raw if risk_raw in ("high", "low") else None
     batch_raw = (batch_id or "").strip()
     batch_id_int = int(batch_raw) if batch_raw.isdigit() else None
+    scope_in = (scope or "").strip().lower() or None
     df_in = (date_from or "").strip()
     dt_in = (date_to or "").strip()
     ms_in = (msisdn or "").strip()
@@ -178,12 +151,18 @@ def detections_list(
     export_q: dict[str, str] = {}
     if status:
         export_q["status"] = status
+    elif queue_in:
+        export_q["queue"] = queue_in
+    if assigned_in:
+        export_q["assigned"] = assigned_in
     if scenario_id:
         export_q["scenario_id"] = scenario_id
     if risk_q:
         export_q["risk"] = risk_q
     if batch_raw:
         export_q["batch_id"] = batch_raw
+    if scope_in:
+        export_q["scope"] = scope_in
     if df_in:
         export_q["date_from"] = df_in
     if dt_in:
@@ -194,14 +173,18 @@ def detections_list(
         export_q["msisdn"] = ms_in
     export_q["per_page"] = str(pp)
     export_query = urlencode(export_q)
+    labels = scenario_label_map(db)
 
     total = count_detections(
         db,
         status=status,
+        queue=queue_in,
         scenario_id=scenario_id,
         batch_id=batch_id_int,
+        scope=scope_in,
         date_from=df_in or None,
         date_to=dt_in or None,
+        assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
         risk=risk_q,
@@ -213,10 +196,13 @@ def detections_list(
     det_pairs = list_detections_with_previous_count(
         db,
         status=status,
+        queue=queue_in,
         scenario_id=scenario_id,
         batch_id=batch_id_int,
+        scope=scope_in,
         date_from=df_in or None,
         date_to=dt_in or None,
+        assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
         risk=risk_q,
@@ -238,15 +224,21 @@ def detections_list(
         _ctx(
             request,
             current_user=user,
-            show_bulk=user.role == "supervisor",
+            scenario_labels=labels,
+            show_bulk=user.role in ("supervisor", "investigator"),
+            show_bulk_delete_test=user.role == "supervisor",
             show_export=user.role == "supervisor",
             show_import_links=user.role == "supervisor",
             detections=dets,
             previous_counts=previous_counts,
             status_filter=status,
+            queue_filter=queue_in,
+            assigned_filter=assigned_in,
+            assignee_options=list_assignee_options(db),
             scenario_filter=scenario_id,
             risk_filter=risk_q,
             batch_filter=batch_raw,
+            scope_filter=scope_in,
             date_from_input=df_in,
             date_to_input=dt_in,
             detection_id_input=det_raw,
@@ -257,6 +249,7 @@ def detections_list(
             bulk_n=bulk_n,
             bulk_applied=bulk_applied,
             bulk_skipped=bulk_skipped,
+            bulk_error=(bulk_error or "").strip() or None,
             page=p,
             per_page=pp,
             per_page_options=allowed_pp,
@@ -272,20 +265,28 @@ def detections_export_xlsx(
     user: User = Depends(require_supervisor),
     db: Session = Depends(get_db),
     status: str | None = None,
+    queue: str | None = Query(None),
+    assigned: str | None = Query(None),
     scenario_id: str | None = None,
     risk: str | None = Query(None),
     batch_id: str | None = Query(None),
+    scope: str | None = Query(None),
     date_from: str | None = Query(None),
     date_to: str | None = Query(None),
     detection_id: str | None = Query(None),
     msisdn: str | None = Query(None),
 ):
     status = (status or "").strip() or None
+    queue_in = (queue or "").strip().lower() or None
+    if queue_in and queue_in not in ("open", "closed", "initial", "test"):
+        queue_in = None
+    assigned_in = (assigned or "").strip() or None
     scenario_id = (scenario_id or "").strip() or None
     risk_raw = (risk or "").strip().lower()
     risk_q = risk_raw if risk_raw in ("high", "low") else None
     batch_raw = (batch_id or "").strip()
     batch_id_int = int(batch_raw) if batch_raw.isdigit() else None
+    scope_in = (scope or "").strip().lower() or None
     df_in = (date_from or "").strip()
     dt_in = (date_to or "").strip()
     ms_in = (msisdn or "").strip()
@@ -294,10 +295,13 @@ def detections_export_xlsx(
     raw, fname = build_detections_export_workbook(
         db,
         status=status,
+        queue=queue_in,
         scenario_id=scenario_id,
         batch_id=batch_id_int,
+        scope=scope_in,
         date_from=df_in or None,
         date_to=dt_in or None,
+        assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
         risk=risk_q,
@@ -312,21 +316,27 @@ def detections_export_xlsx(
 @router.post("/detections/bulk-status", response_class=HTMLResponse)
 def detections_bulk_status(
     request: Request,
-    user: User = Depends(require_supervisor),
+    user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
     ids: list[int] = Form(default=[]),
     to_status: str = Form(...),
 ):
+    id_list = list(ids) if ids else []
+    if not id_list:
+        return RedirectResponse(
+            url="/detections?notice=bulk_status&bulk_applied=0&bulk_skipped=0&bulk_error="
+            + quote("Select at least one detection."),
+            status_code=303,
+        )
     applied, skipped = bulk_change_status(
         db,
-        detection_ids=ids,
+        detection_ids=id_list,
         to_status=to_status.strip(),
         actor_name=operator_display_name(request, user),
+        supervisor=(user.role == "supervisor"),
     )
-    return RedirectResponse(
-        url=f"/detections?notice=bulk_status&bulk_applied={applied}&bulk_skipped={skipped}",
-        status_code=303,
-    )
+    q = f"notice=bulk_status&bulk_applied={applied}&bulk_skipped={skipped}"
+    return RedirectResponse(url=f"/detections?{q}", status_code=303)
 
 
 @router.post("/detections/bulk-delete-test", response_class=HTMLResponse)
@@ -367,12 +377,16 @@ def detection_detail(
     wallet_toks = wallet_tokens_for_prior_lookup(det)
     prior_dets = prior_detections_for_wallet_tokens(db, detection_id=det.id, wallet_tokens=wallet_toks)
     snapshot = metrics_row(det)
+    labels = scenario_label_map(db)
+    actor = operator_display_name(request, user)
+    note_can_edit = {n.id: can_modify_note(user, n, actor_name=actor) for n in det.notes}
     return templates.TemplateResponse(
         request,
         "detection_detail.html",
         _ctx(
             request,
             current_user=user,
+            scenario_labels=labels,
             detection=det,
             metrics=snapshot,
             metrics_ordered=ordered_detection_metric_items(snapshot, scenario_id=det.scenario_id),
@@ -381,7 +395,7 @@ def detection_detail(
             flash_notice=(notice or "").strip() or None,
             prior_wallet_tokens=wallet_toks,
             prior_detections=prior_dets,
-            can_edit_notes=(user.role == "supervisor"),
+            note_can_edit=note_can_edit,
         ),
     )
 
@@ -483,6 +497,7 @@ def transactions_explorer(
     user: User = Depends(require_supervisor),
     db: Session = Depends(get_db),
     batch_id: str | None = Query(None),
+    unique_id: str | None = Query(None),
     msisdn: str | None = Query(None),
     card_id: str | None = Query(None),
     account_holder: str | None = Query(None),
@@ -524,6 +539,7 @@ def transactions_explorer(
     rows, total = search_transactions_for_batch(
         db,
         batch_id=batch_id_int,
+        unique_id=(unique_id or "").strip() or None,
         msisdn=(msisdn or "").strip() or None,
         card_id=(card_id or "").strip() or None,
         account_holder=(account_holder or "").strip() or None,
@@ -545,6 +561,7 @@ def transactions_explorer(
 
         q = {
             "batch_id": batch_raw,
+            "unique_id": (unique_id or "").strip(),
             "msisdn": (msisdn or "").strip(),
             "card_id": (card_id or "").strip(),
             "account_holder": (account_holder or "").strip(),
@@ -570,6 +587,7 @@ def transactions_explorer(
             current_user=user,
             batch_id_input=batch_raw,
             batch_id_int=batch_id_int,
+            unique_id_input=(unique_id or "").strip(),
             msisdn_input=(msisdn or "").strip(),
             card_id_input=(card_id or "").strip(),
             account_holder_input=(account_holder or "").strip(),
@@ -657,9 +675,24 @@ def detection_notes(
         return templates.TemplateResponse(
             request,
             "partials/note_row.html",
-            {"request": request, "note": note, "detection_id": detection_id, "can_edit": user.role == "supervisor"},
+            {
+                "request": request,
+                "note": note,
+                "detection_id": detection_id,
+                "can_edit": can_modify_note(user, note, actor_name=author),
+            },
         )
     return RedirectResponse(url=f"/detections/{detection_id}", status_code=303)
+
+
+def _note_row_ctx(request: Request, user: User, note, detection_id: int) -> dict:
+    actor = operator_display_name(request, user)
+    return {
+        "request": request,
+        "note": note,
+        "detection_id": detection_id,
+        "can_edit": can_modify_note(user, note, actor_name=actor),
+    }
 
 
 @router.get("/detections/{detection_id}/notes/{note_id}", response_class=HTMLResponse)
@@ -676,7 +709,7 @@ def note_row_partial(
     return templates.TemplateResponse(
         request,
         "partials/note_row.html",
-        {"request": request, "note": note, "detection_id": detection_id, "can_edit": user.role == "supervisor"},
+        _note_row_ctx(request, user, note, detection_id),
     )
 
 
@@ -685,12 +718,14 @@ def note_edit_form(
     request: Request,
     detection_id: int,
     note_id: int,
-    user: User = Depends(require_supervisor),
+    user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
 ):
     note = get_note(db, detection_id=detection_id, note_id=note_id)
     if note is None:
         raise HTTPException(status_code=404)
+    if not can_modify_note(user, note, actor_name=operator_display_name(request, user)):
+        raise HTTPException(status_code=403, detail="Not allowed to edit this note.")
     return templates.TemplateResponse(
         request,
         "partials/note_edit_form.html",
@@ -703,10 +738,20 @@ def note_edit_submit(
     request: Request,
     detection_id: int,
     note_id: int,
-    user: User = Depends(require_supervisor),
+    user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
     body: str = Form(...),
 ):
+    note = get_note(db, detection_id=detection_id, note_id=note_id)
+    if note is None:
+        raise HTTPException(status_code=404)
+    if not can_modify_note(user, note, actor_name=operator_display_name(request, user)):
+        msg = "Not allowed to edit this note."
+        if _is_htmx(request):
+            return templates.TemplateResponse(
+                request, "partials/htmx_note_error.html", _ctx(request, current_user=user, message=msg)
+            )
+        return RedirectResponse(url=f"/detections/{detection_id}?error={quote(msg)}", status_code=303)
     try:
         note = update_note(db, detection_id=detection_id, note_id=note_id, body=body)
     except ValueError as e:
@@ -721,7 +766,7 @@ def note_edit_submit(
     return templates.TemplateResponse(
         request,
         "partials/note_row.html",
-        {"request": request, "note": note, "detection_id": detection_id, "can_edit": True},
+        _note_row_ctx(request, user, note, detection_id),
     )
 
 
@@ -730,13 +775,17 @@ def note_delete(
     request: Request,
     detection_id: int,
     note_id: int,
-    user: User = Depends(require_supervisor),
+    user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
 ):
+    note = get_note(db, detection_id=detection_id, note_id=note_id)
+    if note is None:
+        raise HTTPException(status_code=404)
+    if not can_modify_note(user, note, actor_name=operator_display_name(request, user)):
+        raise HTTPException(status_code=403, detail="Not allowed to delete this note.")
     ok = delete_note(db, detection_id=detection_id, note_id=note_id)
     if not ok:
         raise HTTPException(status_code=404)
-    # When used with hx-swap="outerHTML", empty content removes the row.
     return HTMLResponse(content="")
 
 
@@ -818,6 +867,32 @@ def imports_run(
         err = str(res.get("error", "run failed"))
         return RedirectResponse(url=f"/imports/{batch_id}?error={quote(err)}", status_code=303)
     n = int(res.get("detections_created") or 0)
+    # Automatic rolling weekly refresh after any successful run.
+    rolling_err = None
+    rolling_n = None
+    try:
+        rres = run_scenarios_for_rolling(db, days=7, period="weekly")
+        if rres.get("ok"):
+            rolling_n = int(rres.get("detections_created") or 0)
+        else:
+            rolling_err = str(rres.get("error") or "rolling run failed")
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        rolling_err = str(e)
+
+    if rolling_err:
+        return RedirectResponse(
+            url=f"/imports/{batch_id}?notice=scenarios_run&n={n}&rolling_error={quote(rolling_err)}",
+            status_code=303,
+        )
+    if rolling_n is not None:
+        return RedirectResponse(
+            url=f"/imports/{batch_id}?notice=scenarios_run&n={n}&rolling_weekly_n={rolling_n}",
+            status_code=303,
+        )
     return RedirectResponse(url=f"/imports/{batch_id}?notice=scenarios_run&n={n}", status_code=303)
 
 
@@ -850,6 +925,43 @@ def scenarios_retry_external_enrichment(
     return RedirectResponse(url=f"/scenarios?{q}", status_code=303)
 
 
+@router.post("/scenarios/run-rolling", response_class=HTMLResponse)
+def scenarios_run_rolling(
+    request: Request,
+    user: User = Depends(require_supervisor),
+    db: Session = Depends(get_db),
+    days: str = Form("7"),
+    date_from: str = Form(""),
+    date_to: str = Form(""),
+):
+    try:
+        d = int(str(days).strip() or "7")
+    except ValueError:
+        d = 7
+    if d <= 0 or d > 365:
+        return RedirectResponse(url=f"/scenarios?error={quote('Invalid rolling window days.')}", status_code=303)
+    df_raw = str(date_from or "").strip()
+    dt_raw = str(date_to or "").strip()
+    try:
+        res = run_scenarios_for_rolling(
+            db,
+            days=d,
+            period="weekly",
+            date_from=df_raw or None,
+            date_to=dt_raw or None,
+        )
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return RedirectResponse(url=f"/scenarios?error={quote(str(e))}", status_code=303)
+    if not res.get("ok"):
+        return RedirectResponse(url=f"/scenarios?error={quote(str(res.get('error') or 'run failed'))}", status_code=303)
+    n = int(res.get("detections_created") or 0)
+    return RedirectResponse(url=f"/detections?notice=rolling_run&scope=rolling&bulk_n={n}", status_code=303)
+
+
 @router.get("/scenarios", response_class=HTMLResponse)
 def scenarios_manager(
     request: Request,
@@ -863,13 +975,14 @@ def scenarios_manager(
 ):
     row = get_or_create_scenario_config(db)
     enabled_map = scenario_enabled_normalized(getattr(row, "scenario_enabled", None))
+    labels = scenario_label_map(db)
     scenario_rows: list[dict[str, object]] = []
     for sid in SCENARIO_CODES:
         enabled = bool(enabled_map.get(sid, True))
         scenario_rows.append(
             {
                 "id": sid,
-                "label": SCENARIO_LABELS.get(sid, sid),
+                "label": labels.get(sid, sid),
                 "monitored": monitored_bank_for_scenario(row, sid) or "",
                 "status": "Enabled" if enabled else "Disabled",
             }
@@ -961,6 +1074,7 @@ def scenario_detail_page(
         else:
             vals[k] = v
     monitored = monitored_bank_for_scenario(row, sid) or ""
+    labels = scenario_label_map(db)
     return templates.TemplateResponse(
         request,
         "scenario_detail.html",
@@ -968,7 +1082,8 @@ def scenario_detail_page(
             request,
             current_user=user,
             scenario_id=sid,
-            scenario_label=SCENARIO_LABELS.get(sid, sid),
+            scenario_label=labels.get(sid, sid),
+            scenario_label_input=labels.get(sid, sid),
             ready_batches=batches,
             fields=threshold_fields,
             risk_fields=risk_fields,
@@ -995,11 +1110,17 @@ async def scenario_detail_save(
         enable_flag = True
     elif enabled_raw in {"disabled", "disable", "off", "false", "0"}:
         enable_flag = False
-    data = {str(k): str(v) for k, v in form.items() if str(k) not in {"monitored_bank", "scenario_status"}}
+    label_in = str(form.get("scenario_label") or "")
+    data = {
+        str(k): str(v)
+        for k, v in form.items()
+        if str(k) not in {"monitored_bank", "scenario_status", "scenario_label"}
+    }
     monitored_bank = str(form.get("monitored_bank") or "")
     try:
         if enable_flag is not None:
             set_scenario_enabled(db, scenario_id=sid, enabled=enable_flag)
+        set_scenario_label(db, scenario_id=sid, label=label_in)
         update_scenario_partial(db, scenario_id=sid, values=data, monitored_bank=monitored_bank)
     except Exception as e:
         return RedirectResponse(url=f"/scenarios/{sid}?error={quote(str(e))}", status_code=303)

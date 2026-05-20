@@ -5,6 +5,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _strip_dotenv_inline_comment(value: str) -> str:
+    """
+    Remove trailing `` # ...`` from an unquoted value (``KEY=value # note``).
+
+    Without this, ``ALLOW_INSECURE_DEV=true # comment`` is read as invalid for bool checks.
+    Does not strip ``#`` inside quoted strings (whole value must be quoted).
+    """
+    v = value.strip()
+    if not v:
+        return v
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        return v
+    if " #" in v:
+        return v.split(" #", 1)[0].rstrip()
+    return v
+
+
 def _load_dotenv(path: Path, *, override: bool = True) -> None:
     """
     Load KEY=VALUE lines from path into os.environ.
@@ -23,7 +40,7 @@ def _load_dotenv(path: Path, *, override: bool = True) -> None:
                 continue
             key, value = line.split("=", 1)
             key = key.strip().lstrip("\ufeff")
-            value = value.strip()
+            value = _strip_dotenv_inline_comment(value)
             if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
                 value = value[1:-1]
             if not key:
@@ -32,6 +49,16 @@ def _load_dotenv(path: Path, *, override: bool = True) -> None:
                 os.environ[key] = value
     except OSError:
         return
+
+
+DEV_SESSION_SECRET_DEFAULT = "dev-insecure-change-me-set-SESSION_SECRET"
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -48,10 +75,11 @@ def _env_int(name: str, default: int) -> int:
 class Settings:
     database_url: str
     app_title: str
-    demo_mode: bool
     actor_display_name: str
     max_upload_bytes: int
     session_secret: str
+    secure_cookies: bool
+    session_same_site: str
     #: Idle timeout: no requests for this long clears the login session (seconds).
     session_idle_timeout_seconds: int
     #: Absolute max lifetime of a login session / signed session cookie (seconds).
@@ -68,7 +96,11 @@ def get_settings() -> Settings:
     max_up = _env_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
     if max_up < 1:
         max_up = 25 * 1024 * 1024
-    sess = os.getenv("SESSION_SECRET", "").strip() or "dev-insecure-change-me-set-SESSION_SECRET"
+    sess = os.getenv("SESSION_SECRET", "").strip() or DEV_SESSION_SECRET_DEFAULT
+    secure_cookies = _env_bool("SECURE_COOKIES", False)
+    same_site = (os.getenv("SESSION_SAME_SITE") or "lax").strip().lower()
+    if same_site not in {"lax", "strict", "none"}:
+        same_site = "lax"
     idle_sec = _env_int("SESSION_IDLE_TIMEOUT_SECONDS", 15 * 60)
     if idle_sec < 60:
         idle_sec = 15 * 60
@@ -78,10 +110,11 @@ def get_settings() -> Settings:
     return Settings(
         database_url=db_url,
         app_title=title or "Hosted Checkout Monitoring system",
-        demo_mode=os.getenv("DEMO_MODE", "true").lower() in {"1", "true", "yes"},
         actor_display_name=actor,
         max_upload_bytes=max_up,
         session_secret=sess,
+        secure_cookies=secure_cookies,
+        session_same_site=same_site,
         session_idle_timeout_seconds=idle_sec,
         session_max_age_seconds=max_age_sec,
     )

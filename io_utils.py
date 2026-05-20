@@ -45,6 +45,7 @@ class ColumnSpec:
     result: str = "Result"
     account_holder: str = "AccountHolder"
     transaction_id: str = "TransactionId"
+    payment_type: str = "PaymentType"
 
     def required(self) -> List[str]:
         return [
@@ -58,7 +59,7 @@ class ColumnSpec:
         ]
 
     def optional(self) -> List[str]:
-        return [self.result, self.account_holder]
+        return [self.result, self.account_holder, self.payment_type]
 
 
 def read_transactions_xlsx(path: str | Path) -> Tuple[pd.DataFrame, ColumnSpec, Dict[str, str]]:
@@ -105,6 +106,58 @@ def read_transactions_xlsx(path: str | Path) -> Tuple[pd.DataFrame, ColumnSpec, 
         result=resolve(spec.result) or spec.result,
         account_holder=resolve(spec.account_holder) or spec.account_holder,
         transaction_id=resolved[spec.transaction_id],
+        payment_type=resolve(spec.payment_type) or spec.payment_type,
+    )
+    return df, resolved_spec, norm_map
+
+
+def read_transactions_csv(path: str | Path) -> Tuple[pd.DataFrame, ColumnSpec, Dict[str, str]]:
+    """
+    Reads input CSV and returns the same tuple shape as read_transactions_xlsx.
+    """
+    path = Path(path)
+    # low_memory=False: single-pass dtype inference (avoids DtypeWarning when columns mix
+    # numbers and strings, common in wide provider exports).
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    except UnicodeDecodeError:
+        df = pd.read_csv(path, encoding="latin-1", low_memory=False)
+
+    norm_map = _build_normalized_column_map(df.columns)
+    spec = ColumnSpec()
+
+    def resolve(expected: str) -> Optional[str]:
+        return norm_map.get(_norm_header(expected).lower())
+
+    missing: List[str] = []
+    resolved: Dict[str, str] = {}
+    for col in spec.required():
+        actual = resolve(col)
+        if actual is None:
+            missing.append(col)
+        else:
+            resolved[col] = actual
+
+    if missing:
+        detected = ", ".join([str(c) for c in df.columns.tolist()])
+        raise ValueError(
+            "Missing required columns: "
+            + ", ".join(missing)
+            + "\nDetected columns: "
+            + detected
+        )
+
+    resolved_spec = ColumnSpec(
+        request_timestamp=resolved[spec.request_timestamp],
+        mobile=resolved[spec.mobile],
+        bin=resolved[spec.bin],
+        acct_last4=resolved[spec.acct_last4],
+        credit=resolved[spec.credit],
+        reason_code=resolved[spec.reason_code],
+        result=resolve(spec.result) or spec.result,
+        account_holder=resolve(spec.account_holder) or spec.account_holder,
+        transaction_id=resolved[spec.transaction_id],
+        payment_type=resolve(spec.payment_type) or spec.payment_type,
     )
     return df, resolved_spec, norm_map
 
@@ -290,6 +343,22 @@ def _minitrans_connect_params() -> tuple[str, int, str, str, str]:
     )
 
 
+def _minitrans_connect_kwargs(host: str, port: int, user: str, password: str, database: str) -> dict:
+    kwargs: dict = {
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "database": database,
+        "charset": "utf8mb4",
+        "autocommit": True,
+    }
+    ca = (os.environ.get("MINITRANS_SSL_CA") or "").strip()
+    if ca:
+        kwargs["ssl"] = {"ca": ca}
+    return kwargs
+
+
 def fetch_wallet_profiles(msisdns: Sequence[str], chunk_size: int = 1000) -> pd.DataFrame:
     """
     Fetch wallet profiles:
@@ -310,14 +379,8 @@ def fetch_wallet_profiles(msisdns: Sequence[str], chunk_size: int = 1000) -> pd.
 
     rows: List[Tuple[str, str, str]] = []
     conn = pymysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        charset="utf8mb4",
+        **_minitrans_connect_kwargs(host, port, user, password, database),
         cursorclass=pymysql.cursors.Cursor,
-        autocommit=True,
     )
     n_chunks = (len(msisdns) + chunk_size - 1) // chunk_size
     try:
@@ -383,14 +446,8 @@ def fetch_last_30_days_transactions(msisdns: Sequence[str], chunk_size: int = 10
 
     out_rows: List[Tuple] = []
     conn = pymysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        charset="utf8mb4",
+        **_minitrans_connect_kwargs(host, port, user, password, database),
         cursorclass=pymysql.cursors.Cursor,
-        autocommit=True,
     )
     n_chunks = (len(msisdns) + chunk_size - 1) // chunk_size
     try:
@@ -471,14 +528,8 @@ def fetch_post_card_debit_transactions(
 
     out_rows: List[Tuple] = []
     conn = pymysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-        charset="utf8mb4",
+        **_minitrans_connect_kwargs(host, port, user, password, database),
         cursorclass=pymysql.cursors.Cursor,
-        autocommit=True,
     )
     try:
         with conn.cursor() as cur:

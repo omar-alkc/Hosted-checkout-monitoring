@@ -2,14 +2,14 @@
 {% block content %}
   <h1>Imports</h1>
   <div class="panel">
-    <h2>Upload Excel</h2>
+    <h2>Upload transactions</h2>
     <p class="muted">
-      Uses the same column rules as the desktop tool (see <code>io_utils.read_transactions_xlsx</code>).
+      Uses the same column rules as the desktop tool (see <code>io_utils.read_transactions_xlsx</code>/<code>read_transactions_csv</code>).
       The file must include a UniqueId column; values must be unique in the file and not already present in the system.
     </p>
     <form method="post" action="/imports" enctype="multipart/form-data" onsubmit="amlFormBusy(this)">
-      <label>File (.xlsx)
-        <input type="file" name="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+      <label>File (.xlsx or .csv)
+        <input type="file" name="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" required />
       </label>
       <p><button type="submit">Upload</button></p>
     </form>

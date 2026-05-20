@@ -7,8 +7,14 @@ from typing import Any
 from sqlalchemy import Select, func, select, text
 from sqlalchemy.orm import Session, joinedload
 
-from app.constants import ALLOWED_TRANSITIONS, DETECTION_METRICS_DISPLAY_ORDER
-from app.models import Detection, Note, StatusHistory, TransactionRow
+from app.constants import (
+    ALLOWED_TRANSITIONS,
+    DETECTION_METRICS_DISPLAY_ORDER,
+    HIDDEN_DETECTION_METRIC_KEYS,
+    STATUS_KEYS,
+    statuses_for_queue,
+)
+from app.models import Detection, Note, StatusHistory, TransactionRow, User
 
 
 def _strip_like_metachars(s: str) -> str:
@@ -30,8 +36,10 @@ def _detections_stmt(
     db: Session,
     *,
     status: str | None = None,
+    queue: str | None = None,
     scenario_id: str | None = None,
     batch_id: int | None = None,
+    scope: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     assigned: str | None = None,
@@ -44,10 +52,18 @@ def _detections_stmt(
     )
     if status:
         stmt = stmt.where(Detection.status == status)
+    elif queue:
+        bucket = statuses_for_queue(queue)
+        if bucket:
+            stmt = stmt.where(Detection.status.in_(tuple(bucket)))
     if scenario_id:
         stmt = stmt.where(Detection.scenario_id == scenario_id)
     if batch_id is not None:
         stmt = stmt.where(Detection.import_batch_id == batch_id)
+    if scope:
+        sc = scope.strip().lower()
+        if sc in {"batch", "rolling"}:
+            stmt = stmt.where(Detection.scope_type == sc)
     if date_from:
         try:
             d = date.fromisoformat(date_from.strip())
@@ -63,9 +79,11 @@ def _detections_stmt(
         except ValueError:
             pass
     if assigned:
-        lit = _strip_like_metachars(assigned.strip())
-        if lit:
-            stmt = stmt.where(Detection.assigned_senior.ilike(f"%{lit}%"))
+        lit = assigned.strip()
+        clean = _strip_like_metachars(lit)
+        if clean:
+            pat = f"%{clean}%"
+            stmt = stmt.where(func.coalesce(Detection.assigned_senior, "").ilike(pat))
     if detection_id is not None:
         stmt = stmt.where(Detection.id == detection_id)
     if msisdn:
@@ -87,12 +105,48 @@ def _detections_stmt(
     return stmt
 
 
+def list_assignee_options(db: Session) -> list[tuple[str, str]]:
+    """Return (value, label) for Assigned-to filter; value matches assigned_senior storage (display name)."""
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    users = db.scalars(
+        select(User)
+        .where(User.is_active.is_(True))
+        .where(User.role.in_(("investigator", "supervisor")))
+        .order_by(User.display_name, User.username)
+    ).all()
+    for u in users:
+        dn = (u.display_name or "").strip()
+        val = dn if dn else u.username
+        key = val.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        label = f"{dn} ({u.username})" if dn and dn != u.username else u.username
+        out.append((val, label))
+    for row in db.execute(
+        select(Detection.assigned_senior)
+        .where(Detection.assigned_senior.isnot(None))
+        .where(Detection.assigned_senior != "")
+        .distinct()
+        .order_by(Detection.assigned_senior)
+    ).all():
+        val = (row[0] or "").strip()
+        if not val or val.lower() in seen:
+            continue
+        seen.add(val.lower())
+        out.append((val, val))
+    return sorted(out, key=lambda x: x[1].lower())
+
+
 def count_detections(
     db: Session,
     *,
     status: str | None = None,
+    queue: str | None = None,
     scenario_id: str | None = None,
     batch_id: int | None = None,
+    scope: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     assigned: str | None = None,
@@ -103,8 +157,10 @@ def count_detections(
     stmt = _detections_stmt(
         db,
         status=status,
+        queue=queue,
         scenario_id=scenario_id,
         batch_id=batch_id,
+        scope=scope,
         date_from=date_from,
         date_to=date_to,
         assigned=assigned,
@@ -121,8 +177,10 @@ def list_detections(
     db: Session,
     *,
     status: str | None = None,
+    queue: str | None = None,
     scenario_id: str | None = None,
     batch_id: int | None = None,
+    scope: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     assigned: str | None = None,
@@ -135,8 +193,10 @@ def list_detections(
     stmt = _detections_stmt(
         db,
         status=status,
+        queue=queue,
         scenario_id=scenario_id,
         batch_id=batch_id,
+        scope=scope,
         date_from=date_from,
         date_to=date_to,
         assigned=assigned,
@@ -155,8 +215,10 @@ def list_detections_with_previous_count(
     db: Session,
     *,
     status: str | None = None,
+    queue: str | None = None,
     scenario_id: str | None = None,
     batch_id: int | None = None,
+    scope: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     assigned: str | None = None,
@@ -186,8 +248,10 @@ def list_detections_with_previous_count(
     stmt = _detections_stmt(
         db,
         status=status,
+        queue=queue,
         scenario_id=scenario_id,
         batch_id=batch_id,
+        scope=scope,
         date_from=date_from,
         date_to=date_to,
         assigned=assigned,
@@ -259,6 +323,8 @@ def force_set_status(db: Session, *, detection_id: int, to_status: str, actor_na
     nxt = (to_status or "").strip()
     if not nxt:
         raise ValueError("Status cannot be empty.")
+    if nxt not in STATUS_KEYS:
+        raise ValueError(f"Invalid status: {nxt}")
     cur = det.status
     actor_clean = (actor_name or "").strip() or "Unknown"
     det.status = nxt
@@ -325,6 +391,12 @@ def transactions_for_detection(db: Session, det: Detection) -> list[TransactionR
     indices = list(det.raw_row_indices or [])
     if not indices:
         return []
+    scope = str(getattr(det, "scope_type", "batch") or "batch").strip().lower()
+    # Rolling detections store TransactionRow.id in raw_row_indices and have no import batch.
+    if scope == "rolling" or det.import_batch_id is None:
+        stmt = select(TransactionRow).where(TransactionRow.id.in_(indices)).order_by(TransactionRow.id.asc())
+        return list(db.scalars(stmt).all())
+    # Batch detections store Excel row_index values scoped to import_batch_id.
     stmt = (
         select(TransactionRow)
         .where(TransactionRow.import_batch_id == det.import_batch_id)
@@ -361,7 +433,7 @@ def ordered_detection_metric_items(
     seen: set[str] = set()
     out: list[tuple[str, Any]] = []
     for k in DETECTION_METRICS_DISPLAY_ORDER:
-        if k == "RiskError":
+        if k in HIDDEN_DETECTION_METRIC_KEYS or k == "RiskError":
             continue
         if _skip_risk_metric_key(k, show_risk_block=show_risk_block):
             continue
@@ -375,7 +447,7 @@ def ordered_detection_metric_items(
             out.append((k, m[k]))
             seen.add(k)
     for k in sorted(m.keys()):
-        if k in seen or k == "RiskError":
+        if k in seen or k in HIDDEN_DETECTION_METRIC_KEYS or k == "RiskError":
             continue
         if _skip_risk_metric_key(k, show_risk_block=show_risk_block):
             continue
@@ -442,14 +514,52 @@ def _unique_positive_ids(raw_ids: list) -> list[int]:
     return out
 
 
-def bulk_change_status(db: Session, *, detection_ids: list, to_status: str, actor_name: str) -> tuple[int, int]:
-    """Apply the same target status per id where the transition is allowed. Commits once per successful change_status."""
+def bulk_change_status(
+    db: Session,
+    *,
+    detection_ids: list,
+    to_status: str,
+    actor_name: str,
+    supervisor: bool = False,
+) -> tuple[int, int]:
+    """
+    Apply the same target status to each selected detection.
+    Supervisors use force_set_status; investigators use workflow + investigator policy.
+    """
+    from app.services.policy_service import investigator_effective_targets
+
     applied = 0
     skipped = 0
-    for did in dict.fromkeys(_unique_positive_ids(list(detection_ids))):
+    nxt = (to_status or "").strip()
+    ids = _unique_positive_ids(list(detection_ids))
+    if not nxt:
+        return 0, len(ids)
+    if nxt not in STATUS_KEYS:
+        return 0, len(ids)
+    for did in dict.fromkeys(ids):
         try:
-            change_status(db, detection_id=did, to_status=to_status, actor_name=actor_name)
-            applied += 1
+            if supervisor:
+                if force_set_status(db, detection_id=did, to_status=nxt, actor_name=actor_name) is None:
+                    skipped += 1
+                else:
+                    applied += 1
+            else:
+                det = db.get(Detection, did)
+                if det is None:
+                    skipped += 1
+                    continue
+                wf = ALLOWED_TRANSITIONS.get(det.status, set())
+                override = investigator_effective_targets(
+                    db, from_status=det.status, workflow_targets=wf
+                )
+                change_status(
+                    db,
+                    detection_id=did,
+                    to_status=nxt,
+                    actor_name=actor_name,
+                    allowed_targets_override=override,
+                )
+                applied += 1
         except ValueError:
             skipped += 1
     return applied, skipped

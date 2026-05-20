@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps.auth import get_optional_user, require_user
+from app.deps.login_next import sanitize_login_next
+from app.deps.login_rate_limit import login_allowed, record_failed_login
 from app.models import User
 from app.services.users_service import authenticate, change_password
 from app.template_ctx import template_ctx
@@ -44,8 +46,8 @@ def login_page(
 
 
 def _redirect_after_login(user: User, next_raw: str | None) -> RedirectResponse:
-    n = (next_raw or "").strip()
-    if n.startswith("/") and not n.startswith("//") and ".." not in n:
+    n = sanitize_login_next(next_raw)
+    if n:
         loc = n
     elif user.role == "admin":
         loc = "/admin/users"
@@ -62,8 +64,15 @@ def login_submit(
     password: str = Form(""),
     next: str = Form(""),
 ):
+    if not login_allowed(request):
+        q = {"error": "Too many login attempts. Try again later."}
+        nx = (next or "").strip()
+        if nx:
+            q["next"] = nx
+        return RedirectResponse(url="/login?" + urlencode(q), status_code=303)
     u = authenticate(db, username=username, password=password)
     if u is None:
+        record_failed_login(request)
         q: dict[str, str] = {"error": "Invalid username or password."}
         nx = (next or "").strip()
         if nx:

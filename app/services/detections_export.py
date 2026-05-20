@@ -7,8 +7,8 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.constants import SCENARIO_LABELS
 from app.services.detections_service import list_detections
+from app.services.thresholds_service import scenario_label_map
 
 
 def _excel_scalar(v: Any) -> Any:
@@ -29,8 +29,10 @@ def build_detections_export_workbook(
     db: Session,
     *,
     status: str | None = None,
+    queue: str | None = None,
     scenario_id: str | None = None,
     batch_id: int | None = None,
+    scope: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     assigned: str | None = None,
@@ -42,8 +44,10 @@ def build_detections_export_workbook(
     dets = list_detections(
         db,
         status=status,
+        queue=queue,
         scenario_id=scenario_id,
         batch_id=batch_id,
+        scope=scope,
         date_from=date_from,
         date_to=date_to,
         assigned=assigned,
@@ -56,12 +60,13 @@ def build_detections_export_workbook(
     fname = f"aml_detections_{now}.xlsx"
 
     det_rows: list[dict[str, Any]] = []
+    labels = scenario_label_map(db)
     for d in dets:
         m = dict(d.metrics or {})
         row: dict[str, Any] = {
             "id": d.id,
             "scenario_id": d.scenario_id,
-            "scenario_name": SCENARIO_LABELS.get(str(d.scenario_id).strip().upper(), d.scenario_id),
+            "scenario_name": labels.get(str(d.scenario_id).strip().upper(), d.scenario_id),
             "period": d.period,
             "status": d.status,
             "assigned_senior": d.assigned_senior or "",
@@ -91,8 +96,10 @@ def build_detections_export_workbook(
             {"key": "exported_at_utc", "value": datetime.now(timezone.utc).isoformat()},
             {"key": "detection_row_count", "value": total},
             {"key": "filter_status", "value": status or ""},
+            {"key": "filter_queue", "value": queue or ""},
             {"key": "filter_scenario_id", "value": scenario_id or ""},
             {"key": "filter_batch_id", "value": batch_id if batch_id is not None else ""},
+            {"key": "filter_scope", "value": scope or ""},
             {"key": "filter_date_from", "value": date_from or ""},
             {"key": "filter_date_to", "value": date_to or ""},
             {"key": "filter_assigned", "value": assigned or ""},

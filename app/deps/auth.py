@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
+from app.deps.login_next import login_url_with_next
 from app.models import User
 
 
@@ -71,12 +72,9 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User |
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     u = get_optional_user(request, db)
     if u is None:
-        next_url = request.url.path
-        if request.url.query:
-            next_url += "?" + request.url.query
         raise HTTPException(
             status_code=303,
-            headers={"Location": f"/login?next={quote(next_url, safe='')}"},
+            headers={"Location": login_url_with_next(request)},
             detail="login_required",
         )
     return u
