@@ -4,7 +4,7 @@
 **Date:** 2026-05-06  
 **Auditor Role:** Information Security Manager  
 **Classification:** Internal -- Confidential  
-**Note:** These findings were identified during the data flow audit. They cover application-level security controls and configuration hygiene. This is not a penetration test or a full OWASP assessment -- these are observations from static code review.
+**Note:** These findings were identified during the data flow audit. They cover application-level security controls and configuration hygiene. This is not a penetration test or a full OWASP assessment — these are observations from static code review. **Production deployment target:** RHEL 9 with rootless Podman Compose (see `deploy/rhel9/README.md`); Windows dev uses Docker Desktop.
 
 ---
 

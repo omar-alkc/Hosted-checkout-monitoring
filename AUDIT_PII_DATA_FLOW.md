@@ -18,7 +18,7 @@ This audit verifies two specific controls:
 
 ## 2. Methodology
 
-- Full static analysis of all Python source files, configuration files, Docker definitions, dependency manifests, and templates in the repository.
+- Full static analysis of all Python source files, configuration files, container/Compose definitions (Podman on RHEL 9 production; Docker on Windows dev), dependency manifests, and templates in the repository.
 - Keyword search for outbound HTTP libraries (`requests`, `httpx`, `urllib.request`, `aiohttp`, `http.client`), AI/ML service patterns (`openai`, `azure`, `anthropic`, `gemini`, `llm`, `embedding`, `inference`), and write operations (`INSERT`, `UPDATE`, `DELETE`, `PUT`, `POST` to external hosts).
 - Trace of every database connection to determine read/write direction.
 - Review of all environment variables and configuration parameters for external service endpoints.

@@ -16,3 +16,5 @@ build/
 *.exe
 *.xlsx
 *.docx
+AUDIT_PII_DATA_FLOW.md
+AUDIT_SECURITY_FINDINGS.md
