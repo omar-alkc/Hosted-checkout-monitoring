@@ -1,0 +1,17 @@
+[Unit]
+Description=AML Web Stack (Podman Compose)
+Documentation=file:///home/aml/aml-web/deploy/rhel9/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/aml/aml-web
+Environment=COMPOSE_HTTP_TIMEOUT=300
+ExecStart=/usr/bin/podman compose up -d --build
+ExecStop=/usr/bin/podman compose down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

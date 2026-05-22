@@ -662,7 +662,7 @@ def build():
     add_table(doc,
         ["Category", "Requirement"],
         [
-            ["Deployment", "Docker Compose — PostgreSQL + FastAPI web service; single-command startup"],
+            ["Deployment", "Podman Compose (RHEL 9) — PostgreSQL + FastAPI web service; single-command startup"],
             ["Authentication", "Session-cookie (signed); configurable timeout; HTTPS required in production"],
             ["Password security", "Bcrypt-hashed passwords; password change enforceable on first login"],
             ["Database migrations", "Alembic; auto-applied at container startup (alembic upgrade head)"],

@@ -32,10 +32,11 @@ At a high level the stack is **browser clients → FastAPI → PostgreSQL**, wit
 | **Root modules**                | `**io_utils`** (Excel ingest, optional MariaDB reads), `**scenarios`**, `**wallet_enrichment**` — used by the web app’s import and scenario pipeline.                                                                |
 
 
-**Deployment (Docker Compose)**
+**Deployment (Podman / Docker Compose)**
 
 - `**db`**: Postgres (application database).
 - `**web`**: Image built from `**Dockerfile**` — installs deps, copies `app/` and root helpers, runs `**alembic upgrade head**` then `**uvicorn app.main:app**` (`docker-entrypoint.sh`).
+- **Production (RHEL 9):** rootless **Podman Compose** — see [`deploy/rhel9/README.md`](deploy/rhel9/README.md).
 
 ```mermaid
 flowchart TB
@@ -217,39 +218,70 @@ CREATE TABLE investigator_status_policy (
 
 ---
 
-## Run with Docker (recommended for the web UI)
+## Run with Podman / Docker Compose (recommended for the web UI)
 
-Requires [Docker Compose](https://docs.docker.com/compose/) v2.
+**Production (RHEL 9):** use rootless **Podman Compose** — full runbook at [`deploy/rhel9/README.md`](deploy/rhel9/README.md). Quick start:
 
-1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose injects `**.env**` into the **web** container as environment variables (the file is not inside the image). The **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db`** on the Compose network—you do not need to change that URL for Docker. For the app to start, set a 32+ character `**SESSION_SECRET**` or `**ALLOW_INSECURE_DEV=true**` (dev stacks only; never use the latter in production).
+```bash
+sudo dnf install -y podman podman-compose
+cp .env.example .env   # set SESSION_SECRET, POSTGRES_PASSWORD, ENV=production
+chmod +x deploy/rhel9/setup.sh && ./deploy/rhel9/setup.sh
+```
+
+**Windows dev:** use [Docker Desktop](#windows--docker-desktop) and `docker compose` instead of `podman compose`.
+
+Requires Compose v2 (`podman compose` on RHEL, `docker compose` on Windows).
+
+1. Copy `**.env.example**` to `**.env**` and edit secrets / optional `**MINITRANS_***` enrichment vars (MariaDB/MySQL for wallet and minitrans lookups). Compose injects `**.env**` into the **web** container as environment variables (the file is not inside the image). The **web** service overrides `**DATABASE_URL`** so it uses the Postgres service `**db`** on the Compose network—you do not need to change that URL for container deployment. For the app to start, set a 32+ character `**SESSION_SECRET**` or `**ALLOW_INSECURE_DEV=true**` (dev stacks only; never use the latter in production).
 2. Build and start **Postgres** + **web**:
   ```bash
-   docker compose up --build -d
+   podman compose up --build -d    # RHEL 9 production
+   docker compose up --build -d    # Windows / Docker Desktop
   ```
 3. Open **[http://127.0.0.1:8000/](http://127.0.0.1:8000/)** (not https). `**/health`** returns `{"ok":true}` without requiring the DB.
 
-The database is reachable from the **Docker host** only, at `**127.0.0.1:15433`** (mapped to Postgres in the container so tools on the same machine can run `**alembic`**, GUI clients, `**pg_dump**`). It is **not** published on LAN/WAN interfaces—use an SSH tunnel from another host if you must connect remotely.
+The database is reachable from the **host** only, at `**127.0.0.1:15433`** (mapped to Postgres in the container so tools on the same machine can run `**alembic`**, GUI clients, `**pg_dump**`). It is **not** published on LAN/WAN interfaces—use an SSH tunnel from another host if you must connect remotely.
 
 Optional: set `**POSTGRES_PASSWORD`** in `**.env`** (used by the `**db**` container and by the `**web**` service’s internal `**DATABASE_URL**`). If you set it, point a host-run app at `**postgresql://postgres:<same-password>@127.0.0.1:15433/aml_web**`.
 
 Stop and remove containers (data volume kept unless you add `-v`):
 
 ```bash
-docker compose down
+podman compose down    # RHEL
+docker compose down    # Windows
 ```
 
-**Images:** `**Dockerfile`** builds the API from `**requirements.txt`**, runs `**alembic upgrade head**` on start, then **uvicorn** on port 8000.
+**Images:** `**Dockerfile`** builds the API from `**requirements.txt`**, runs `**alembic upgrade head**` on start, then **uvicorn** on port 8000. Both web and db bind to **127.0.0.1** on the host; put **Nginx** in front for HTTPS (see [`deploy/rhel9/nginx-aml-web.conf.example`](deploy/rhel9/nginx-aml-web.conf.example)).
 
-### Postgres in Docker, app on the host (e.g. Ubuntu + Nginx/systemd)
+| Task | RHEL (Podman) | Windows (Docker) |
+|------|---------------|------------------|
+| Start stack | `podman compose up --build -d` | `docker compose up --build -d` |
+| Stop | `podman compose down` | `docker compose down` |
+| Status | `podman compose ps` | `docker compose ps` |
+| Exec into container | `podman exec …` | `docker exec …` |
 
-Use this when PostgreSQL should run in Compose but **Uvicorn** runs natively (Tailscale or public reverse proxy to `127.0.0.1:8000`), matching a single-server deployment:
+Create admin after first deploy: `podman exec -it card_cashin_web python -m app.scripts.create_admin myuser`
+
+### RHEL 9 + systemd auto-start
+
+Copy [`deploy/rhel9/aml-web.service`](deploy/rhel9/aml-web.service) to `~/.config/systemd/user/`, set `WorkingDirectory`, enable linger (`loginctl enable-linger "$USER"`), then `systemctl --user enable --now aml-web.service`. Details in [`deploy/rhel9/README.md`](deploy/rhel9/README.md).
+
+### Postgres in Compose, app on the host (optional hybrid)
+
+Use this when PostgreSQL should run in Compose but **Uvicorn** runs natively (requires Python 3.13 on the host):
 
 1. Copy `**.env.example`** to `**.env**`. Set `**SESSION_SECRET**`, and optionally `**POSTGRES_PASSWORD**`. For the app on the host, set `**DATABASE_URL=postgresql://postgres:<password>@127.0.0.1:15433/aml_web**` (same password as `**POSTGRES_PASSWORD**`, or omit both for the default `**postgres**` password *only in non-production*).
-2. Start **only** the database: `**docker compose up -d db*`*. Wait until healthy (or run `**docker compose ps**`).
+2. Start **only** the database: `**podman compose up -d db**` (RHEL) or `**docker compose up -d db**` (Windows). Wait until healthy (or run `**podman compose ps**`).
 3. Install Python deps (see [Local development](#local-development-no-docker-for-python)), then from the repo root run `**alembic upgrade head**` and `**python -m app.scripts.create_admin …**`
-4. Run the app: `**./start_app.sh**` or `**uvicorn app.main:app --host 127.0.0.1 --port 8000**` (or a **systemd** unit); put **Nginx**/Caddy in front for HTTPS and Tailscale/public access as needed.
+4. Run the app: `**./start_app.sh**` or `**./run_setup_rhel.sh**` (RHEL db-only path); put **Nginx**/Caddy in front for HTTPS.
 
-Data lives in the Docker volume `**aml_web_pgdata`**; back it up with `**docker exec**` + `**pg_dump**` or a volume snapshot tool.
+On RHEL, `./run_setup_rhel.sh` starts db + migrations; `./run_setup_rhel.sh --full` starts the complete Podman stack instead.
+
+Data lives in the Compose volume `**aml_web_pgdata`**; back it up with `**podman exec**` + `**pg_dump**` or a volume snapshot tool.
+
+### Windows / Docker Desktop
+
+For local development on Windows, use `run_setup.cmd` (Postgres in Docker, app on host) or `docker compose up --build -d` for the full stack. Docker Desktop must be running.
 
 ### Production security checklist
 
@@ -258,7 +290,7 @@ Before exposing the app beyond a trusted network:
 1. **Secrets** — Set a strong `SESSION_SECRET` (32+ random characters). Do **not** set `ALLOW_INSECURE_DEV` in production. Set `ENV=production` so the app refuses default session secrets and `postgres:postgres` database URLs.
 2. **HTTPS** — Terminate TLS at Nginx, Caddy, or a cloud load balancer. Set `SECURE_COOKIES=true` and consider `SESSION_SAME_SITE=strict`.
 3. **Sessions** — Recommended: `SESSION_IDLE_TIMEOUT_SECONDS=1800` (30 min), `SESSION_MAX_AGE_SECONDS=28800` (8 h).
-4. **Network** — Prefer binding Uvicorn to `127.0.0.1` and exposing only the reverse proxy. In Docker, restrict `FORWARDED_ALLOW_IPS` (see `.env.example`) so clients cannot spoof `X-Forwarded-*` headers.
+4. **Network** — Prefer binding Uvicorn to `127.0.0.1` and exposing only the reverse proxy. In Compose, restrict `FORWARDED_ALLOW_IPS` (see `.env.example`) so clients cannot spoof `X-Forwarded-*` headers. The default compose file binds web and db to loopback on the host.
 5. **Database** — Rotate `POSTGRES_PASSWORD`; keep Postgres on loopback (`127.0.0.1:15433`) as in Compose.
 6. **MariaDB enrichment** — If `MINITRANS_*` crosses an untrusted network, set `MINITRANS_SSL_CA` to your CA bundle path.
 7. **Repository** — Never commit `.env`, Excel transaction files (`*.xlsx`), or installers (`*.exe`). Enable GitHub secret scanning on the repo.
@@ -294,7 +326,7 @@ On Linux/macOS:
 python3.13 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 ```
 
-- `**run_setup.cmd**` (Windows) installs Python deps, starts **only** the `**db`** Compose service (not `**web**`), then runs `**alembic upgrade head**`. On Linux, run `**docker compose up -d db**` yourself, then `**alembic upgrade head**` from an activated `**.venv**`.
+- `**run_setup.cmd**` (Windows) or `**./run_setup_rhel.sh**` (RHEL/Linux) installs Python deps, starts **only** the `**db`** Compose service (not `**web**`), then runs `**alembic upgrade head**`. On RHEL without host Python, use `**./run_setup_rhel.sh --full**` or `**podman compose up --build -d**` for the full stack.
 - If nothing is listening on **15433**, DB-backed routes return **500**.
 
 ### Web UI (local)
