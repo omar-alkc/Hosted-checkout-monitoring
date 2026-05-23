@@ -7,7 +7,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
-from app.constants import SCENARIO_LABELS, STATUS_KEYS, STATUS_LABELS, allowed_targets
+from app.constants import (
+    INVESTIGATOR_BULK_STATUS_KEYS,
+    SCENARIO_LABELS,
+    STATUS_KEYS,
+    STATUS_LABELS,
+    allowed_targets,
+    status_helper_text,
+    status_quick_actions,
+    status_select_groups,
+)
 from app.database import get_db
 from app.deps.auth import require_supervisor, require_supervisor_or_investigator
 from app.models import Detection, ImportBatch, ImportBatchStatus, User
@@ -129,7 +138,10 @@ def detections_list(
     queue_in = (queue or "").strip().lower() or None
     if queue_in and queue_in not in ("open", "closed", "initial", "test"):
         queue_in = None
-    assigned_in = (assigned or "").strip() or None
+    assigned_param = (assigned or "").strip() or None
+    assigned_in = assigned_param
+    if assigned_in and assigned_in.lower() == "me":
+        assigned_in = operator_display_name(request, user)
     scenario_id = (scenario_id or "").strip() or None
     risk_raw = (risk or "").strip().lower()
     risk_q = risk_raw if risk_raw in ("high", "low") else None
@@ -234,6 +246,7 @@ def detections_list(
             status_filter=status,
             queue_filter=queue_in,
             assigned_filter=assigned_in,
+            assigned_filter_param=assigned_param,
             assignee_options=list_assignee_options(db),
             scenario_filter=scenario_id,
             risk_filter=risk_q,
@@ -246,6 +259,11 @@ def detections_list(
             flash_notice=(notice or "").strip() or None,
             export_query=export_query,
             status_keys=STATUS_KEYS,
+            bulk_status_keys=(
+                list(INVESTIGATOR_BULK_STATUS_KEYS)
+                if user.role == "investigator"
+                else list(STATUS_KEYS)
+            ),
             bulk_n=bulk_n,
             bulk_applied=bulk_applied,
             bulk_skipped=bulk_skipped,
@@ -281,6 +299,8 @@ def detections_export_xlsx(
     if queue_in and queue_in not in ("open", "closed", "initial", "test"):
         queue_in = None
     assigned_in = (assigned or "").strip() or None
+    if assigned_in and assigned_in.lower() == "me":
+        assigned_in = operator_display_name(request, user)
     scenario_id = (scenario_id or "").strip() or None
     risk_raw = (risk or "").strip().lower()
     risk_q = risk_raw if risk_raw in ("high", "low") else None
@@ -373,6 +393,7 @@ def detection_detail(
         targets = investigator_effective_targets(db, from_status=det.status, workflow_targets=targets)
     if user.role == "supervisor":
         targets = set(STATUS_KEYS)
+    targets_sorted = sorted(targets)
     tx_rows = transactions_for_detection(db, det)
     wallet_toks = wallet_tokens_for_prior_lookup(det)
     prior_dets = prior_detections_for_wallet_tokens(db, detection_id=det.id, wallet_tokens=wallet_toks)
@@ -390,7 +411,10 @@ def detection_detail(
             detection=det,
             metrics=snapshot,
             metrics_ordered=ordered_detection_metric_items(snapshot, scenario_id=det.scenario_id),
-            allowed_statuses=sorted(targets),
+            allowed_statuses=targets_sorted,
+            status_select_groups=status_select_groups(targets),
+            status_quick_actions=status_quick_actions(targets, from_status=det.status),
+            status_helper=status_helper_text(det.status, targets),
             tx_rows=tx_rows,
             flash_notice=(notice or "").strip() or None,
             prior_wallet_tokens=wallet_toks,
@@ -643,7 +667,9 @@ def detection_status(
             )
     except ValueError as e:
         return RedirectResponse(url=f"/detections/{detection_id}?error={quote(str(e))}", status_code=303)
-    return RedirectResponse(url="/detections?notice=status_saved", status_code=303)
+    return RedirectResponse(
+        url=f"/detections/{detection_id}?notice=status_saved", status_code=303
+    )
 
 
 @router.post("/detections/{detection_id}/notes", response_class=HTMLResponse)
@@ -848,7 +874,7 @@ def imports_run(
     batch_id: int,
     user: User = Depends(require_supervisor),
     db: Session = Depends(get_db),
-    period: str = Form("daily"),
+    period: str = Form("both"),
 ):
     batch = db.get(ImportBatch, batch_id)
     if batch is None:

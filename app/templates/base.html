@@ -8,80 +8,54 @@
   </head>
   <body>
     {% set path_norm = (request.url.path.rstrip('/') or '/') %}
-    <header class="top{% if path_norm == '/login' %} top--login{% endif %}">
-      {% if path_norm != '/login' %}
-        <strong class="header-title">{{ settings.app_title }}</strong>
-      {% endif %}
-      <nav class="top-nav">
-        {% if current_user is defined and current_user %}
-          {% if current_user.role != 'admin' %}
-            <a href="/detections">Detections</a>
-          {% endif %}
-          {% if current_user.role == 'supervisor' %}
-            <a href="/imports">Imports</a>
-            <a href="/scenarios">Scenario Manager</a>
-            <a href="/transactions">Transactions explorer</a>
-          {% endif %}
-          {% if current_user.role == 'admin' %}
-            <a href="/admin/users">Users</a>
-          {% endif %}
-          <details class="nav-settings">
-            <summary class="nav-settings-summary">Settings</summary>
-            <div class="nav-settings-menu">
-              {% if current_user.role == 'supervisor' %}
-                <a href="/supervisor/investigator-policy">Investigator policy</a>
-              {% endif %}
-              <a href="/account/password">Password</a>
-            </div>
-          </details>
-          <div class="nav-session">
-            <span class="muted nav-user">{{ current_user.display_name or current_user.username }} · {{ current_user.role }}</span>
-            <form method="post" action="/logout" class="inline-form">
-              <button type="submit" class="button secondary">Log out</button>
-            </form>
+    {% set show_sidebar = current_user is defined and current_user and path_norm != '/login' %}
+
+    {% if show_sidebar %}
+    <div class="app-shell">
+      <div class="sidebar-backdrop" id="sidebar-backdrop" hidden aria-hidden="true"></div>
+      {% include "partials/sidebar_nav.html" %}
+      <div class="app-main">
+        <header class="app-topbar">
+          <div class="app-topbar-start">
+            <button
+              type="button"
+              class="sidebar-mobile-toggle"
+              id="sidebar-mobile-toggle"
+              aria-expanded="false"
+              aria-controls="app-sidebar"
+              aria-label="Open navigation menu"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+              </svg>
+            </button>
           </div>
-        {% endif %}
-      </nav>
-    </header>
-    <main>
-      {% set q = request.query_params %}
-      {% set notice = (q.get('notice') or '')|string %}
-      {% set error = (q.get('error') or '')|string %}
-      {% set saved = (q.get('saved') or '')|string %}
+          <strong class="app-topbar-title">{{ settings.app_title }}</strong>
+          <div class="app-topbar-end" aria-hidden="true"></div>
+        </header>
+    {% else %}
+        <header class="top top--login">
+          <nav class="top-nav" aria-label="Main"></nav>
+        </header>
+    {% endif %}
 
-      {% if error and error.strip() %}
-        <div class="error">{{ error }}</div>
-      {% endif %}
-      {% if saved == "1" %}
-        <div class="flash success">Saved.</div>
-      {% endif %}
-      {% set notices_handled_in_page = ("enrichment_retry",) %}
-      {% if notice and notice.strip() and notice not in notices_handled_in_page %}
-        {% set labels = {
-          "status_saved": "Detection status was updated.",
-          "bulk_status": "Bulk status applied.",
-          "test_created": "Test detections created.",
-          "test_deleted": "Test detections deleted.",
-          "scenarios_run": "Scenarios run completed.",
-          "logged_out": "You have been logged out.",
-          "user_created": "User created.",
-        } %}
-        {% if notice == "scenarios_run" %}
-          {% set n = (q.get('n') or '')|string %}
-          <div class="flash success">{{ labels.get(notice, notice) }}{% if n.strip() %} ({{ n }} detections created){% endif %}</div>
-        {% else %}
-          <div class="flash success">{{ labels.get(notice, notice) }}</div>
-        {% endif %}
-      {% endif %}
+        <main id="main-content">
+          {% include "partials/flash_messages.html" %}
+          {% block content %}{% endblock %}
+        </main>
 
-      {% block content %}{% endblock %}
-    </main>
+    {% if show_sidebar %}
+      </div>
+    </div>
+    {% endif %}
+
     <div id="aml-loading-overlay" class="loading-overlay" hidden>
       <div class="loading-card" role="status" aria-live="polite" aria-label="Loading">
         <div class="spinner" aria-hidden="true"></div>
         <div class="loading-text">Working…</div>
       </div>
     </div>
+
     <script src="{{ url_for('static', path='htmx.min.js') }}"></script>
     <script>
       window.amlFormBusy = function (form) {
@@ -91,7 +65,94 @@
         if (window.amlLoadingBegin) window.amlLoadingBegin();
       };
     </script>
-    <!-- scenario enable/disable handled in scenario_detail.html -->
+
+    {% if show_sidebar %}
+    <script>
+      (function () {
+        var PIN_KEY = "aml-sidebar-pinned";
+        var pinBtn = document.getElementById("sidebar-pin-btn");
+        var mobileBtn = document.getElementById("sidebar-mobile-toggle");
+        var backdrop = document.getElementById("sidebar-backdrop");
+
+        function isPinned() {
+          return document.body.classList.contains("sidebar-pinned");
+        }
+
+        function setPinned(pinned) {
+          document.body.classList.toggle("sidebar-pinned", pinned);
+          if (pinBtn) {
+            pinBtn.setAttribute("aria-pressed", pinned ? "true" : "false");
+            pinBtn.setAttribute("aria-label", pinned ? "Unpin sidebar" : "Pin sidebar open");
+            pinBtn.title = pinned ? "Unpin sidebar" : "Pin sidebar open";
+          }
+          try {
+            if (pinned) localStorage.setItem(PIN_KEY, "1");
+            else localStorage.removeItem(PIN_KEY);
+          } catch (e) {
+            // no-op
+          }
+        }
+
+        function openMobile() {
+          document.body.classList.add("sidebar-open");
+          if (backdrop) {
+            backdrop.hidden = false;
+            backdrop.setAttribute("aria-hidden", "false");
+          }
+          if (mobileBtn) {
+            mobileBtn.setAttribute("aria-expanded", "true");
+            mobileBtn.setAttribute("aria-label", "Close navigation menu");
+          }
+        }
+
+        function closeMobile() {
+          document.body.classList.remove("sidebar-open");
+          if (backdrop) {
+            backdrop.hidden = true;
+            backdrop.setAttribute("aria-hidden", "true");
+          }
+          if (mobileBtn) {
+            mobileBtn.setAttribute("aria-expanded", "false");
+            mobileBtn.setAttribute("aria-label", "Open navigation menu");
+          }
+        }
+
+        try {
+          if (localStorage.getItem(PIN_KEY) === "1") setPinned(true);
+        } catch (e) {
+          // no-op
+        }
+
+        if (pinBtn) {
+          pinBtn.addEventListener("click", function () {
+            setPinned(!isPinned());
+          });
+        }
+
+        if (mobileBtn) {
+          mobileBtn.addEventListener("click", function () {
+            if (document.body.classList.contains("sidebar-open")) closeMobile();
+            else openMobile();
+          });
+        }
+
+        if (backdrop) {
+          backdrop.addEventListener("click", closeMobile);
+        }
+
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && document.body.classList.contains("sidebar-open")) {
+            closeMobile();
+          }
+        });
+
+        window.addEventListener("resize", function () {
+          if (window.matchMedia("(min-width: 769px)").matches) closeMobile();
+        });
+      })();
+    </script>
+    {% endif %}
+
     <script>
       (function () {
         var overlay = document.getElementById("aml-loading-overlay");
@@ -108,7 +169,6 @@
           active++;
           show();
           if (safetyTimer) window.clearTimeout(safetyTimer);
-          // Safety: never block UI forever if a request aborts.
           safetyTimer = window.setTimeout(function () {
             active = 0;
             hide();
@@ -125,7 +185,6 @@
         window.amlLoadingBegin = begin;
         window.amlLoadingEnd = end;
 
-        /** Reset the 45s safety hide so long jobs (e.g. enrichment retry) keep "Working…" until response. */
         window.amlLoadingExtendForLongJob = function () {
           if (safetyTimer) window.clearTimeout(safetyTimer);
           safetyTimer = window.setTimeout(function () {
@@ -134,18 +193,17 @@
           }, 600000);
         };
 
-        // Show spinner for normal form submits
         document.addEventListener(
           "submit",
           function (e) {
             var form = e.target;
-            if (!form) return;
+            if (!form || form.tagName !== "FORM") return;
+            if (e.defaultPrevented) return;
             begin();
           },
-          true
+          false
         );
 
-        // HTMX requests
         document.body.addEventListener("htmx:beforeRequest", begin);
         document.body.addEventListener("htmx:afterRequest", end);
         document.body.addEventListener("htmx:afterOnLoad", end);
@@ -154,12 +212,83 @@
         document.body.addEventListener("htmx:timeout", end);
         document.body.addEventListener("htmx:abort", end);
 
-        // Page restored from bfcache: ensure hidden.
         window.addEventListener("pageshow", function () {
           active = 0;
           hide();
         });
       })();
+    </script>
+    <script>
+      (function () {
+        document.querySelectorAll(".flash-auto-dismiss").forEach(function (el) {
+          window.setTimeout(function () {
+            el.style.transition = "opacity 0.35s ease";
+            el.style.opacity = "0";
+            window.setTimeout(function () {
+              if (el.parentNode) el.parentNode.removeChild(el);
+            }, 400);
+          }, 5000);
+        });
+      })();
+    </script>
+    <script>
+      window.amlInitModal = function (overlay, options) {
+        if (!overlay || overlay.__amlModalInit) return;
+        overlay.__amlModalInit = true;
+        var opts = options || {};
+        var dialog = overlay.querySelector("[role='dialog']") || overlay;
+        var lastFocus = null;
+
+        function focusables() {
+          return dialog.querySelectorAll(
+            "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"
+          );
+        }
+
+        function trapFocus(e) {
+          if (overlay.hidden || e.key !== "Tab") return;
+          var nodes = focusables();
+          if (!nodes.length) return;
+          var first = nodes[0];
+          var last = nodes[nodes.length - 1];
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
+
+        function closeModal() {
+          if (overlay.hidden) return;
+          overlay.hidden = true;
+          document.body.classList.remove("modal-open");
+          if (lastFocus && lastFocus.focus) lastFocus.focus();
+          if (opts.onClose) opts.onClose();
+        }
+
+        function openModal(trigger) {
+          lastFocus = trigger || document.activeElement;
+          overlay.hidden = false;
+          document.body.classList.add("modal-open");
+          var nodes = focusables();
+          if (nodes.length) nodes[0].focus();
+          else dialog.focus();
+          if (opts.onOpen) opts.onOpen();
+        }
+
+        overlay.addEventListener("click", function (e) {
+          if (e.target === overlay) closeModal();
+        });
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && !overlay.hidden) closeModal();
+          trapFocus(e);
+        });
+
+        window.amlOpenModalOverlay = openModal;
+        window.amlCloseModalOverlay = closeModal;
+      };
     </script>
     <script src="{{ url_for('static', path='table-sort.js') }}" defer></script>
   </body>

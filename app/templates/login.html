@@ -2,8 +2,9 @@
 {% block content %}
   <div class="auth-page">
     <h1>{{ settings.app_title }}</h1>
+    <p class="muted auth-subtitle">Sign in to review detections</p>
     {% if login_error %}
-      <div class="error">{{ login_error }}</div>
+      <div class="error" role="alert">{{ login_error }}</div>
     {% endif %}
     <div class="panel">
       <form method="post" action="/login" onsubmit="amlFormBusy(this)">
@@ -14,7 +15,7 @@
         <label>Password
           <input type="password" name="password" autocomplete="current-password" required />
         </label>
-        <p><button type="submit">Sign in</button></p>
+        <p><button type="submit" class="button">Sign in</button></p>
       </form>
     </div>
   </div>

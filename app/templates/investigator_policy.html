@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-  <p class="muted"><a href="/scenarios">← Scenario Manager</a></p>
+  <p class="muted"><a href="/detections">← Detections</a></p>
   <h1>Investigator status policy</h1>
   <p class="muted">
     Supervisors define which status transitions <strong>investigators</strong> may apply.
@@ -12,14 +12,26 @@
 
   <div class="panel">
     <form method="post" action="/supervisor/investigator-policy" onsubmit="amlFormBusy(this)">
+      <div class="policy-edge-header">
+        <span>Allowed transition</span>
+        <span>Allow</span>
+      </div>
       <div class="policy-edge-list">
+        {% set ns = namespace(prev='') %}
         {% for fs, ts in workflow_pairs %}
           {% set key = fs ~ '|' ~ ts %}
+          {% if fs != ns.prev %}
+            {% if not loop.first %}</div>{% endif %}
+            <div class="policy-edge-group">
+              <h2 class="policy-edge-group-title">{{ status_labels.get(fs, fs) }}</h2>
+            {% set ns.prev = fs %}
+          {% endif %}
           <label class="policy-edge">
+            <span class="policy-edge-label">→ {{ status_labels.get(ts, ts) }}</span>
             <input type="checkbox" name="edge" value="{{ fs }}|{{ ts }}" {% if key in policy_selected %}checked{% endif %} />
-            <span>{{ status_labels.get(fs, fs) }} → {{ status_labels.get(ts, ts) }}</span>
           </label>
         {% endfor %}
+        </div>
       </div>
       <p><button type="submit">Save policy</button></p>
     </form>

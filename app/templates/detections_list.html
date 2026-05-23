@@ -2,10 +2,17 @@
 {% block content %}
   <h1>Detections</h1>
   {% if flash_notice == "bulk_status" %}
-    <div class="flash success">Bulk status: applied {{ bulk_applied or 0 }}, skipped {{ bulk_skipped or 0 }} {% if bulk_error %} — {{ bulk_error }}{% else %} (invalid transition or not selected).{% endif %}</div>
+    <div class="flash success flash-auto-dismiss" role="status">Bulk status: applied {{ bulk_applied or 0 }}, skipped {{ bulk_skipped or 0 }} {% if bulk_error %} — {{ bulk_error }}{% else %} (invalid transition or not selected).{% endif %}</div>
   {% endif %}
+
+  <div class="queue-presets" role="navigation" aria-label="Queue presets">
+    <a class="button secondary queue-preset" href="/detections?queue=open">Open queue</a>
+    <a class="button secondary queue-preset" href="/detections?queue=open&amp;assigned=me">My assigned</a>
+    <a class="button secondary queue-preset" href="/detections?queue=initial">Initial review</a>
+  </div>
+
   <div class="panel">
-    <form class="filters-grid" method="get" action="/detections">
+    <form class="filters-grid" method="get" action="/detections" id="detections-filter-form">
       <input type="hidden" name="page" value="1" />
       <label>Work queue
         <select name="queue" title="Open, closed, initial review, or test-only">
@@ -19,8 +26,9 @@
       <label>Assigned to
         <select name="assigned">
           <option value="">(any)</option>
+          <option value="me" {% if assigned_filter_param == 'me' %}selected{% endif %}>Me</option>
           {% for val, lab in assignee_options %}
-            <option value="{{ val }}" {% if assigned_filter == val %}selected{% endif %}>{{ lab }}</option>
+            <option value="{{ val }}" {% if assigned_filter_param != 'me' and assigned_filter == val %}selected{% endif %}>{{ lab }}</option>
           {% endfor %}
         </select>
       </label>
@@ -32,6 +40,9 @@
           {% endfor %}
         </select>
       </label>
+      {% if status_filter %}
+        <p class="filter-hint muted">Work queue is ignored while Status is set.</p>
+      {% endif %}
       <label>Scenario
         <select name="scenario_id" title="Filter by scenario">
           <option value="">(any)</option>
@@ -40,35 +51,42 @@
           {% endfor %}
         </select>
       </label>
-      <label>Risk
-        <select name="risk" title="Filter by metrics Risk (High / Low)">
-          <option value="">(any)</option>
-          <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>High</option>
-          <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>Low</option>
-        </select>
-      </label>
-      <label>Import batch id
-        <input type="number" name="batch_id" value="{{ batch_filter or '' }}" min="1" step="1" />
-      </label>
-      <label>Scope
-        <select name="scope">
-          <option value="">(any)</option>
-          <option value="batch" {% if scope_filter == 'batch' %}selected{% endif %}>Batch</option>
-          <option value="rolling" {% if scope_filter == 'rolling' %}selected{% endif %}>Rolling</option>
-        </select>
-      </label>
-      <label>From date
-        <input type="date" name="date_from" value="{{ date_from_input or '' }}" />
-      </label>
-      <label>To date
-        <input type="date" name="date_to" value="{{ date_to_input or '' }}" />
-      </label>
-      <label>Detection id
-        <input type="number" name="detection_id" value="{{ detection_id_input or '' }}" min="1" step="1" />
-      </label>
       <label>MSISDN (wallet id)
         <input type="text" name="msisdn" value="{{ msisdn_input or '' }}" placeholder="Phone / wallet" />
       </label>
+
+      <details class="filters-advanced"{% if risk_filter or batch_filter or scope_filter or date_from_input or date_to_input or detection_id_input %} open{% endif %}>
+        <summary>Advanced filters</summary>
+        <div class="filters-advanced-grid">
+          <label>Risk
+            <select name="risk" title="Filter by metrics Risk (High / Low)">
+              <option value="">(any)</option>
+              <option value="high" {% if risk_filter == 'high' %}selected{% endif %}>High</option>
+              <option value="low" {% if risk_filter == 'low' %}selected{% endif %}>Low</option>
+            </select>
+          </label>
+          <label>Import batch id
+            <input type="number" name="batch_id" value="{{ batch_filter or '' }}" min="1" step="1" />
+          </label>
+          <label>Scope
+            <select name="scope">
+              <option value="">(any)</option>
+              <option value="batch" {% if scope_filter == 'batch' %}selected{% endif %}>Batch</option>
+              <option value="rolling" {% if scope_filter == 'rolling' %}selected{% endif %}>Rolling</option>
+            </select>
+          </label>
+          <label>From date
+            <input type="date" name="date_from" value="{{ date_from_input or '' }}" />
+          </label>
+          <label>To date
+            <input type="date" name="date_to" value="{{ date_to_input or '' }}" />
+          </label>
+          <label>Detection id
+            <input type="number" name="detection_id" value="{{ detection_id_input or '' }}" min="1" step="1" />
+          </label>
+        </div>
+      </details>
+
       <div class="filter-actions">
         <button type="submit" class="button">Filter</button>
         <a class="button secondary" href="/detections">Reset</a>
@@ -82,7 +100,7 @@
     </form>
   </div>
   {% if show_bulk %}
-  <form id="det-bulk-form" method="post" action="/detections/bulk-status" onsubmit="amlFormBusy(this)">
+  <form id="det-bulk-form" method="post" action="/detections/bulk-status" onsubmit="return amlBulkStatusSubmit(this)">
   {% endif %}
     <div class="scroll-x panel">
       <table class="data js-sortable">
@@ -121,8 +139,8 @@
             {% set _m = d.metrics or {} %}
             {% set _sid_r = (d.scenario_id or "")|string|trim|upper %}
             {% set _msisdn_cell = d.metrics | format_detection_msisdn(d.scenario_id) %}
-            <tr>
-              {% if show_bulk %}<td><input type="checkbox" name="ids" value="{{ d.id }}" /></td>{% endif %}
+            <tr data-status="{{ d.status }}">
+              {% if show_bulk %}<td><input type="checkbox" name="ids" value="{{ d.id }}" class="det-row-check" /></td>{% endif %}
               <td data-sort-value="{{ d.id }}"><a href="/detections/{{ d.id }}">{{ d.id }}</a></td>
               <td data-sort-value="{{ d.scenario_id }}" title="{{ d.scenario_id }}">{{ scenario_labels.get(d.scenario_id, d.scenario_id) }}</td>
               <td data-sort-value="{{ _msisdn_cell }}" title="{{ _msisdn_cell }}">{{ _msisdn_cell }}</td>
@@ -157,24 +175,40 @@
           {% endfor %}
           {% if not detections %}
             <tr>
-              <td colspan="{% if show_bulk %}10{% else %}9{% endif %}" class="muted">No detections yet. Upload transactions, run scenarios from Imports.</td>
+              <td colspan="{% if show_bulk %}10{% else %}9{% endif %}" class="muted">
+                {% if show_import_links %}
+                  No detections yet. Upload transactions and run scenarios from Imports.
+                {% else %}
+                  No detections match your filters. Try Reset or a queue preset above.
+                {% endif %}
+              </td>
             </tr>
           {% endif %}
         </tbody>
       </table>
-      <div class="muted" style="display:grid; grid-template-columns:1fr auto 1fr; gap:0.75rem; align-items:center; justify-content:space-between; margin-top:0.75rem">
+      <div class="muted pagination-bar">
         <div>
           Showing <strong>{{ detections|length }}</strong> of <strong>{{ total }}</strong>
           · page <strong>{{ page }}</strong> / <strong>{{ pages }}</strong>
         </div>
-        <div style="display:flex; flex-wrap:wrap; gap:0.4rem; align-items:center; justify-content:center">
-          <a class="button secondary" href="{{ page_url(1) }}" title="First page" aria-label="First page" {% if page <= 1 %}aria-disabled="true"{% endif %}>«</a>
-          <a class="button secondary" href="{{ page_url(page - 1) }}" title="Previous page" aria-label="Previous page" {% if page <= 1 %}aria-disabled="true"{% endif %}>‹</a>
-          <a class="button secondary" href="{{ page_url(page + 1) }}" title="Next page" aria-label="Next page" {% if page >= pages %}aria-disabled="true"{% endif %}>›</a>
-          <a class="button secondary" href="{{ page_url(pages) }}" title="Last page" aria-label="Last page" {% if page >= pages %}aria-disabled="true"{% endif %}>»</a>
+        <div class="pagination-controls">
+          {% if page <= 1 %}
+            <span class="button secondary disabled" aria-disabled="true" title="First page">«</span>
+            <span class="button secondary disabled" aria-disabled="true" title="Previous page">‹</span>
+          {% else %}
+            <a class="button secondary" href="{{ page_url(1) }}" title="First page" aria-label="First page">«</a>
+            <a class="button secondary" href="{{ page_url(page - 1) }}" title="Previous page" aria-label="Previous page">‹</a>
+          {% endif %}
+          {% if page >= pages %}
+            <span class="button secondary disabled" aria-disabled="true" title="Next page">›</span>
+            <span class="button secondary disabled" aria-disabled="true" title="Last page">»</span>
+          {% else %}
+            <a class="button secondary" href="{{ page_url(page + 1) }}" title="Next page" aria-label="Next page">›</a>
+            <a class="button secondary" href="{{ page_url(pages) }}" title="Last page" aria-label="Last page">»</a>
+          {% endif %}
         </div>
-        <div style="display:flex; justify-content:flex-end">
-          <label style="display:flex; flex-direction:row; gap:0.4rem; align-items:center; color:inherit; font-size:inherit">
+        <div class="pagination-per-page">
+          <label class="pagination-per-page-label">
             Rows
             <select id="per-page-select" style="min-width:6rem">
               {% for n in per_page_options %}
@@ -189,10 +223,12 @@
     <div class="panel">
       <h2 style="margin-top: 0">Bulk actions</h2>
       <p class="muted">Select rows in the table above, choose a status, then Apply.{% if not show_bulk_delete_test %} Allowed transitions follow investigator policy.{% endif %}</p>
+      <p id="bulk-status-warning" class="error" hidden role="alert"></p>
+      <p id="bulk-status-summary" class="muted" hidden></p>
       <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end">
         <label>New status
-          <select name="to_status">
-            {% for k in status_keys %}
+          <select name="to_status" id="bulk-to-status">
+            {% for k in bulk_status_keys %}
               <option value="{{ k }}">{{ status_labels[k] }}</option>
             {% endfor %}
           </select>
@@ -214,8 +250,49 @@
         document.querySelectorAll('#det-bulk-form input[name="ids"]').forEach(function (cb) {
           cb.checked = all.checked;
         });
+        amlBulkStatusUpdate();
+      });
+      document.querySelectorAll(".det-row-check").forEach(function (cb) {
+        cb.addEventListener("change", amlBulkStatusUpdate);
       });
     })();
+
+    function amlBulkSelectedRows() {
+      return Array.prototype.slice.call(
+        document.querySelectorAll('#det-bulk-form input[name="ids"]:checked')
+      ).map(function (cb) {
+        return cb.closest("tr");
+      }).filter(Boolean);
+    }
+
+    function amlBulkStatusUpdate() {
+      var rows = amlBulkSelectedRows();
+      var warn = document.getElementById("bulk-status-warning");
+      var summary = document.getElementById("bulk-status-summary");
+      if (!warn || !summary) return;
+      warn.hidden = true;
+      summary.hidden = true;
+      if (!rows.length) return;
+      var statuses = rows.map(function (tr) { return tr.getAttribute("data-status") || ""; });
+      var unique = statuses.filter(function (s, i, a) { return a.indexOf(s) === i; });
+      if (unique.length > 1) {
+        warn.textContent = "Selected rows have mixed statuses (" + unique.length + " different). Bulk apply may skip invalid transitions.";
+        warn.hidden = false;
+      }
+    }
+
+    function amlBulkStatusSubmit(form) {
+      amlBulkStatusUpdate();
+      var rows = amlBulkSelectedRows();
+      if (!rows.length) {
+        alert("Select at least one detection.");
+        return false;
+      }
+      amlFormBusy(form);
+      return true;
+    }
+    window.amlBulkStatusSubmit = amlBulkStatusSubmit;
+    window.amlBulkStatusUpdate = amlBulkStatusUpdate;
   </script>
   {% endif %}
   <script>

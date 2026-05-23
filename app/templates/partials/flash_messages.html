@@ -1,0 +1,29 @@
+{% set q = request.query_params %}
+{% set notice = (q.get('notice') or '')|string %}
+{% set error = (q.get('error') or '')|string %}
+{% set saved = (q.get('saved') or '')|string %}
+
+{% if error and error.strip() %}
+  <div class="error" role="alert">{{ error }}</div>
+{% endif %}
+{% if saved == "1" %}
+  <div class="flash success flash-auto-dismiss" role="status">Saved.</div>
+{% endif %}
+{% set notices_handled_in_page = ("enrichment_retry",) %}
+{% if notice and notice.strip() and notice not in notices_handled_in_page %}
+  {% set labels = {
+    "status_saved": "Detection status was updated.",
+    "bulk_status": "Bulk status applied.",
+    "test_created": "Test detections created.",
+    "test_deleted": "Test detections deleted.",
+    "scenarios_run": "Scenarios run completed.",
+    "logged_out": "You have been logged out.",
+    "user_created": "User created.",
+  } %}
+  {% if notice == "scenarios_run" %}
+    {% set n = (q.get('n') or '')|string %}
+    <div class="flash success flash-auto-dismiss" role="status">{{ labels.get(notice, notice) }}{% if n.strip() %} ({{ n }} detections created){% endif %}</div>
+  {% else %}
+    <div class="flash success flash-auto-dismiss" role="status">{{ labels.get(notice, notice) }}</div>
+  {% endif %}
+{% endif %}

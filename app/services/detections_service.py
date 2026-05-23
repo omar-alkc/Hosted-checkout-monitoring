@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, func, literal_column, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.constants import (
@@ -211,6 +211,40 @@ def list_detections(
     return list(db.scalars(stmt).all())
 
 
+# Count other detections sharing any WalletId / WalletIdsPipe token (same rules as detail page).
+_PRIOR_DETECTION_COUNT_SQL = """
+(SELECT count(*)::bigint FROM detections d2
+ WHERE d2.id != detections.id
+ AND EXISTS (
+   SELECT 1
+   FROM unnest(
+     array_remove(
+       ARRAY[NULLIF(trim(coalesce(detections.metrics->>'WalletId', '')), '')]
+       || COALESCE(
+         (
+           SELECT array_agg(trim(x))
+           FROM unnest(string_to_array(coalesce(detections.metrics->>'WalletIdsPipe', ''), '|')) AS t(x)
+           WHERE trim(x) <> ''
+         ),
+         ARRAY[]::text[]
+       ),
+       NULL
+     )
+   ) AS tok(t)
+   WHERE tok.t IS NOT NULL
+     AND (
+       trim(coalesce(d2.metrics->>'WalletId', '')) = tok.t
+       OR EXISTS (
+         SELECT 1
+         FROM unnest(string_to_array(coalesce(d2.metrics->>'WalletIdsPipe', ''), '|')) AS seg(x)
+         WHERE trim(seg.x) = tok.t AND trim(seg.x) <> ''
+       )
+     )
+ )
+)::int
+"""
+
+
 def list_detections_with_previous_count(
     db: Session,
     *,
@@ -230,20 +264,10 @@ def list_detections_with_previous_count(
 ) -> list[tuple[Detection, int]]:
     """
     Like list_detections, but returns (Detection, previous_detection_count) where:
-    - "customer" is the primary MSISDN in metrics WalletId
-    - "previous" means created_at < this detection's created_at
+    - wallet tokens come from metrics WalletId and WalletIdsPipe (same as detail page)
+    - "previous" means any other detection sharing at least one token (any age / batch)
     """
-    d2 = Detection.__table__.alias("d2")
-    wallet1 = func.trim(func.coalesce(Detection.metrics["WalletId"].astext, ""))
-    wallet2 = func.trim(func.coalesce(d2.c.metrics["WalletId"].astext, ""))
-    prev_count = (
-        select(func.count(d2.c.id))
-        .where(d2.c.id != Detection.id)
-        .where(wallet2 != "")
-        .where(wallet2 == wallet1)
-        .where(d2.c.created_at < Detection.created_at)
-        .scalar_subquery()
-    )
+    prev_count = literal_column(_PRIOR_DETECTION_COUNT_SQL).label("previous_detection_count")
 
     stmt = _detections_stmt(
         db,
@@ -475,7 +499,7 @@ def wallet_tokens_for_prior_lookup(det: Detection) -> list[str]:
 def prior_detections_for_wallet_tokens(
     db: Session, *, detection_id: int, wallet_tokens: list[str], limit: int = 50
 ) -> list[tuple[int, datetime, str, str]]:
-    """Older detections involving any of the given wallet / MSISDN tokens (metrics WalletId or pipe list)."""
+    """Other detections involving any of the given wallet / MSISDN tokens (metrics WalletId or pipe list)."""
     tokens = list(dict.fromkeys(t.strip() for t in wallet_tokens if t and str(t).strip()))
     if not tokens:
         return []

@@ -21,7 +21,7 @@ COPY app/ ./app/
 COPY io_utils.py scenarios.py wallet_enrichment.py ./
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh
 
 EXPOSE 8000
 

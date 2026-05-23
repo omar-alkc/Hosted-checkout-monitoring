@@ -97,3 +97,64 @@ def test_get_settings_has_secure_cookie_fields():
 
 def test_status_keys_non_empty():
     assert len(STATUS_KEYS) >= 5
+
+
+def test_status_quick_actions_from_false_positive_initial():
+    from app.constants import allowed_targets, status_quick_actions
+
+    allowed = allowed_targets("false_positive_initial")
+    quick = status_quick_actions(allowed, from_status="false_positive_initial", limit=3)
+    assert [k for k, _ in quick] == [
+        "false_positive_final",
+        "suspicious_final",
+        "pending_evidence",
+    ]
+
+
+def test_status_helper_and_quick_actions_closed_false_positive_final():
+    from app.constants import allowed_targets, status_helper_text, status_quick_actions
+
+    allowed = allowed_targets("false_positive_final")
+    assert status_quick_actions(allowed, from_status="false_positive_final") == []
+    assert status_helper_text("false_positive_final", allowed) == (
+        "This detection is closed (False positive (final)). No further triage steps are expected."
+    )
+
+
+def test_status_quick_actions_from_suspicious_final():
+    from app.constants import allowed_targets, status_helper_text, status_quick_actions
+
+    allowed = allowed_targets("suspicious_final")
+    quick = status_quick_actions(allowed, from_status="suspicious_final", limit=3)
+    assert [k for k, _ in quick] == ["wallet_lock", "wallet_ci", "pending_evidence"]
+    assert status_helper_text("suspicious_final", allowed) == (
+        "From Suspicious (final), typical next steps: Wallet lock, Wallet CI, Pending evidence."
+    )
+
+
+def test_status_quick_actions_from_wallet_lock():
+    from app.constants import allowed_targets, status_helper_text, status_quick_actions
+
+    allowed = allowed_targets("wallet_lock")
+    quick = status_quick_actions(allowed, from_status="wallet_lock", limit=3)
+    assert quick == [("wallet_reactivated", "Wallet Re-activated")]
+    assert status_helper_text("wallet_lock", allowed) == (
+        "From Wallet lock, typical next steps: Wallet Re-activated."
+    )
+
+
+def test_wallet_reactivated_is_closed_with_no_next_steps():
+    from app.constants import (
+        CLOSED_DETECTION_STATUSES,
+        CLOSED_OUTCOME_NO_NEXT_STEP_STATUSES,
+        allowed_targets,
+        status_helper_text,
+        status_quick_actions,
+    )
+
+    assert "wallet_reactivated" in CLOSED_DETECTION_STATUSES
+    assert "wallet_reactivated" in CLOSED_OUTCOME_NO_NEXT_STEP_STATUSES
+    allowed = allowed_targets("wallet_reactivated")
+    assert allowed == set()
+    assert status_quick_actions(allowed, from_status="wallet_reactivated") == []
+    assert "closed" in status_helper_text("wallet_reactivated", allowed).lower()

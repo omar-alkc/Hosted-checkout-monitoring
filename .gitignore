@@ -15,6 +15,9 @@ build/
 *.log
 *.exe
 *.xlsx
+!sample_data/*.xlsx
 *.docx
 AUDIT_PII_DATA_FLOW.md
 AUDIT_SECURITY_FINDINGS.md
+.claude/
+.cursor/

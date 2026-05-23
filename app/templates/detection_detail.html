@@ -2,235 +2,355 @@
 {% block content %}
   <p class="muted"><a href="/detections">← Detections</a></p>
   <h1>Detection {{ detection.id }}</h1>
-  {% if flash_notice == "status_saved" %}
-    <div class="flash success">Detection status was updated.</div>
-  {% endif %}
-  <div class="panel">
-    <div style="display:flex; flex-wrap:wrap; gap:0.6rem 0.9rem; align-items:center">
+
+  {% set _msisdn_display = metrics | format_detection_msisdn(detection.scenario_id) %}
+
+  <div class="case-header-sticky panel">
+    <div class="case-header-inner">
       <span class="badge badge-status-{{ detection.status }}">{{ status_labels.get(detection.status, detection.status) }}</span>
-      <span><strong>Scenario</strong>: {{ scenario_labels.get(detection.scenario_id, detection.scenario_id) }}</span>
-      <span><strong>Period</strong>: {{ detection.period }}</span>
-      <span><strong>Batch</strong>:
+      <span class="case-header-item"><strong>Scenario</strong> {{ scenario_labels.get(detection.scenario_id, detection.scenario_id) }}</span>
+      <span class="case-header-item"><strong>MSISDN</strong> {{ _msisdn_display or "—" }}</span>
+      {% if detection.assigned_senior %}
+        <span class="case-header-item"><strong>Assigned</strong> {{ detection.assigned_senior }}</span>
+      {% endif %}
+      <span class="case-header-item"><strong>Period</strong> {{ detection.period }}</span>
+      <span class="case-header-item"><strong>Batch</strong>:
         {% if (detection.scope_type or 'batch')|lower == 'rolling' or not detection.import_batch_id %}
           <span class="muted">Rolling (all imports)</span>
         {% elif current_user.role == 'supervisor' %}
           <a href="/imports/{{ detection.import_batch_id }}">#{{ detection.import_batch_id }}</a>
         {% else %}
-          #{{ detection.import_batch_id }}
+          <span title="Contact supervisor for batch details">#{{ detection.import_batch_id }}</span>
         {% endif %}
       </span>
-      {% if detection.assigned_senior %}
-        <span><strong>Assigned</strong>: {{ detection.assigned_senior }}</span>
+    </div>
+  </div>
+
+  <div class="case-detail">
+    {% set summary_keys = ['WalletId', 'Risk', 'TotalAmount', 'TxnCount', 'UniqueCards', 'UniqueWallets'] %}
+    <div class="panel case-detail-metrics metrics-summary-panel">
+      <h2 style="margin-top: 0">Key metrics</h2>
+      <dl class="metrics-summary-grid">
+        {% for sk in summary_keys %}
+          {% set sv = metrics.get(sk) %}
+          {% if sv is not none and sv != '' %}
+            <div class="metrics-summary-item">
+              <dt>{{ metric_key_labels.get(sk, sk) }}</dt>
+              <dd>
+                {% set kl = sk|lower %}
+                {% if ('amount' in kl) or (kl == 'credit') or (kl == 'debit') %}
+                  {{ sv|amount0 }}
+                {% else %}
+                  {{ sv | display_cell }}
+                {% endif %}
+              </dd>
+            </div>
+          {% endif %}
+        {% endfor %}
+        <div class="metrics-summary-item">
+          <dt>{{ metric_key_labels.get('PreviousAlerts', 'Previous alerts') }}</dt>
+          <dd>{{ prior_detections|length }}</dd>
+        </div>
+      </dl>
+      {% set ns_extra = namespace(count=0) %}
+      {% for k, v in metrics_ordered %}
+        {% if k not in summary_keys %}
+          {% set ns_extra.count = ns_extra.count + 1 %}
+        {% endif %}
+      {% endfor %}
+      {% if ns_extra.count %}
+        <details class="case-detail-metrics-expand">
+          <summary>Show all metrics ({{ ns_extra.count }})</summary>
+          <dl class="metrics-summary-grid metrics-summary-grid-expanded">
+            {% for k, v in metrics_ordered %}
+              {% if k not in summary_keys %}
+                <div class="metrics-summary-item">
+                  <dt>{{ metric_key_labels.get(k, k) }}</dt>
+                  <dd>
+                    {% set kl = k|lower %}
+                    {% if k == "ScenarioId" %}
+                      {{ scenario_labels.get(v|string, v) }}
+                    {% elif kl == "txndate" or kl == "txnweek" %}
+                      {{ v|shortdt }}
+                    {% elif ('amount' in kl) or (kl == 'credit') or (kl == 'debit') %}
+                      {{ v|amount0 }}
+                    {% elif k in ['CardHolderNamesPipe', 'WalletHolderNamesPipe', 'TopCardHolderName'] %}
+                      <div class="metric-name-chips">{{ v | name_pipe_chips }}</div>
+                    {% else %}
+                      {% set v_disp = v | display_cell %}
+                      {% if v_disp %}{{ v_disp }}{% else %}—{% endif %}
+                    {% endif %}
+                  </dd>
+                </div>
+              {% endif %}
+            {% endfor %}
+          </dl>
+        </details>
       {% endif %}
     </div>
-  </div>
-  {% if prior_wallet_tokens and prior_detections %}
-    <div class="panel">
-      <h2>Previous detections (same MSISDN / wallet)</h2>
-      <p class="muted">Matching wallet id(s): {{ prior_wallet_tokens | join(", ") }}</p>
-      <div class="scroll-x">
-        <table class="data js-sortable">
-          <thead>
-            <tr>
-              <th class="th-sortable" data-sort-col="0" data-sort-type="number">Detection id</th>
-              <th class="th-sortable" data-sort-col="1" data-sort-type="date" data-sort-default="desc">Created</th>
-              <th class="th-sortable" data-sort-col="2" data-sort-type="text">Scenario</th>
-              <th class="th-sortable" data-sort-col="3" data-sort-type="text">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for pid, pdt, psid, pstatus in prior_detections %}
-              <tr>
-                <td data-sort-value="{{ pid }}"><a href="/detections/{{ pid }}">{{ pid }}</a></td>
-                <td class="muted" data-sort-value="{{ pdt.isoformat() if pdt else '' }}">{{ pdt | shortdt }}</td>
-                <td data-sort-value="{{ psid }}">{{ scenario_labels.get(psid, psid) }}</td>
-                <td data-sort-value="{{ pstatus }}"><span class="badge badge-status-{{ pstatus }}">{{ status_labels.get(pstatus, pstatus) }}</span></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  {% endif %}
-  <div class="panel">
-    <h2>Metrics snapshot</h2>
-    <div class="scroll-x">
-      <table class="data">
-        <tbody>
-          {% for k, v in metrics_ordered %}
-            <tr>
-              <th style="width: 220px">{{ metric_key_labels.get(k, k) }}</th>
-              <td>
-                {% set kl = k|lower %}
-                {% if k == "ScenarioId" %}
-                  {{ scenario_labels.get(v|string, v) }}
-                {% elif kl == "txndate" or kl == "txnweek" %}
-                  {{ v|shortdt }}
-                {% elif ('amount' in kl) or (kl == 'credit') or (kl == 'debit') %}
-                  {{ v|amount0 }}
-                {% elif k in ['CardHolderNamesPipe', 'WalletHolderNamesPipe', 'TopCardHolderName'] %}
-                  <div class="metric-name-chips">{{ v | name_pipe_chips }}</div>
-                {% else %}
-                  {% set v_disp = v | display_cell %}
-                  {% if v_disp %}{{ v_disp }}{% else %}—{% endif %}
-                {% endif %}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-  <div class="panel">
-    <h2>Linked transactions ({{ tx_rows|length }})</h2>
-    {% if tx_rows %}
-      <div class="scroll-x">
-        <table class="data js-sortable">
-          <thead>
-            <tr>
-              <th class="th-sortable" data-sort-col="0" data-sort-type="number">#</th>
-              <th class="th-sortable" data-sort-col="1" data-sort-type="text">MSISDN</th>
-              <th class="th-sortable" data-sort-col="2" data-sort-type="text">CardId</th>
-              <th class="th-sortable" data-sort-col="3" data-sort-type="text">Card holder</th>
-              <th class="th-sortable" data-sort-col="4" data-sort-type="text">Bank</th>
-              <th class="th-sortable" data-sort-col="5" data-sort-type="number">Amount</th>
-              <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Date & time</th>
-              <th class="th-sortable" data-sort-col="7" data-sort-type="text">Approved</th>
-            </tr>
-          </thead>
-          {% set ns = namespace(total_amount=0.0) %}
-          <tbody>
-            {% for t in tx_rows %}
-              {% set p = t.payload %}
-              {% set bank = p.get("OPP_card.issuer.bank") %}
-              {% set holder = p.get("AccountHolder") | display_cell %}
-              {% set wallet_disp = p.get("WalletId") | display_cell %}
-              {% set card_disp = p.get("CardId") | display_cell %}
-              {% set bank_disp = bank | display_cell %}
-              {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
-              {% set a = p.get("Amount") %}
-              {% if a is not none and a != "" %}
-                {% set ns.total_amount = ns.total_amount + (a|float) %}
-              {% endif %}
-              <tr>
-                <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
-                <td data-sort-value="{{ wallet_disp }}">{% if wallet_disp %}{{ wallet_disp }}{% else %}—{% endif %}</td>
-                <td data-sort-value="{{ card_disp }}">{% if card_disp %}{{ card_disp }}{% else %}—{% endif %}</td>
-                <td data-sort-value="{{ holder }}">{% if holder %}{{ holder }}{% else %}—{% endif %}</td>
-                <td data-sort-value="{{ bank_disp }}">{% if bank_disp %}{{ bank_disp }}{% else %}—{% endif %}</td>
-                <td data-sort-value="{{ p.get('Amount', '') }}">{{ p.get("Amount")|amount0 }}</td>
-                <td data-sort-value="{% if ts_raw is not none %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
-                <td data-sort-value="{{ p.get('Approved', '') }}">{{ p.get("Approved", "") }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-          <tfoot>
-            <tr>
-              <th colspan="5" style="text-align:right">Total</th>
-              <th>{{ ns.total_amount|amount0 }}</th>
-              <th colspan="2"></th>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    {% else %}
-      <p class="muted">No linked rows (re-run scenarios after import if empty).</p>
-    {% endif %}
-    {% if detection.import_batch_id %}
-    <div style="margin-top: 0.75rem; display:flex; justify-content:flex-end; gap:0.5rem; flex-wrap:wrap">
-      <button
-        type="button"
-        class="button secondary"
-        onclick="window.amlOpenTxPopup && window.amlOpenTxPopup({{ detection.import_batch_id }}, { msisdn: '{{ (metrics.get('WalletId','')|string)|e }}', card_id: '{{ (metrics.get('CardId','')|string)|e }}' })"
-      >See more transactions</button>
-    </div>
-    {% endif %}
-  </div>
-  <div class="panel">
-    <h2>Notes</h2>
-    <ul id="notes-list" style="list-style: none; padding-left: 0">
-      {% for n in detection.notes %}
-        {% with note=n, detection_id=detection.id, can_edit=note_can_edit.get(n.id, false) %}
-          {% include "partials/note_row.html" %}
-        {% endwith %}
-      {% endfor %}
-    </ul>
-    <form
-      hx-post="/detections/{{ detection.id }}/notes"
-      hx-target="#notes-list"
-      hx-swap="afterbegin"
-      hx-on::after-request="if(event.detail.successful) this.reset()"
-    >
-      <label>Note
-        <textarea name="body" required></textarea>
-      </label>
-      <p class="muted">Author: {{ operator_display_name }}</p>
-      <p><button type="submit">Add note</button></p>
-    </form>
-  </div>
-  <details class="panel" style="padding: 0">
-    <summary style="padding: 1rem; cursor: pointer">
-      <strong>Status change log</strong>
-      <span class="muted">
-        {% if detection.status_history %} ({{ detection.status_history|length }}){% endif %}
-      </span>
-    </summary>
-    <div style="padding: 0 1rem 1rem 1rem">
-      {% if detection.status_history %}
+
+    <div class="panel case-detail-transactions">
+      <h2 style="margin-top: 0">Linked transactions ({{ tx_rows|length }})</h2>
+      {% if tx_rows %}
         <div class="scroll-x">
           <table class="data js-sortable">
             <thead>
               <tr>
-                <th class="th-sortable" data-sort-col="0" data-sort-type="date" data-sort-default="desc">When</th>
-                <th class="th-sortable" data-sort-col="1" data-sort-type="text">From</th>
-                <th class="th-sortable" data-sort-col="2" data-sort-type="text">To</th>
-                <th class="th-sortable" data-sort-col="3" data-sort-type="text">Actor</th>
+                <th class="th-sortable" data-sort-col="0" data-sort-type="number">#</th>
+                <th class="th-sortable" data-sort-col="1" data-sort-type="text">MSISDN</th>
+                <th class="th-sortable" data-sort-col="2" data-sort-type="text">CardId</th>
+                <th class="th-sortable" data-sort-col="3" data-sort-type="text">Card holder</th>
+                <th class="th-sortable" data-sort-col="4" data-sort-type="text">Bank</th>
+                <th class="th-sortable" data-sort-col="5" data-sort-type="number">Amount</th>
+                <th class="th-sortable" data-sort-col="6" data-sort-type="date" data-sort-default="desc">Date & time</th>
+                <th class="th-sortable" data-sort-col="7" data-sort-type="text">Approved</th>
               </tr>
             </thead>
+            {% set ns = namespace(total_amount=0.0) %}
             <tbody>
-              {% for h in detection.status_history %}
+              {% for t in tx_rows %}
+                {% set p = t.payload %}
+                {% set bank = p.get("OPP_card.issuer.bank") %}
+                {% set holder = p.get("AccountHolder") | display_cell %}
+                {% set wallet_disp = p.get("WalletId") | display_cell %}
+                {% set card_disp = p.get("CardId") | display_cell %}
+                {% set bank_disp = bank | display_cell %}
+                {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
+                {% set a = p.get("Amount") %}
+                {% if a is not none and a != "" %}
+                  {% set ns.total_amount = ns.total_amount + (a|float) %}
+                {% endif %}
                 <tr>
-                  <td class="muted" data-sort-value="{{ h.created_at.isoformat() if h.created_at else '' }}">{{ h.created_at | shortdt }}</td>
-                  <td data-sort-value="{{ h.from_status or '' }}">{{ status_labels.get(h.from_status, h.from_status) if h.from_status else "—" }}</td>
-                  <td data-sort-value="{{ h.to_status or '' }}">{{ status_labels.get(h.to_status, h.to_status) }}</td>
-                  <td data-sort-value="{{ h.actor_name or '' }}">{{ h.actor_name or "—" }}</td>
+                  <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
+                  <td data-sort-value="{{ wallet_disp }}">{% if wallet_disp %}{{ wallet_disp }}{% else %}—{% endif %}</td>
+                  <td data-sort-value="{{ card_disp }}">{% if card_disp %}{{ card_disp }}{% else %}—{% endif %}</td>
+                  <td data-sort-value="{{ holder }}">{% if holder %}{{ holder }}{% else %}—{% endif %}</td>
+                  <td data-sort-value="{{ bank_disp }}">{% if bank_disp %}{{ bank_disp }}{% else %}—{% endif %}</td>
+                  <td data-sort-value="{{ p.get('Amount', '') }}">{{ p.get("Amount")|amount0 }}</td>
+                  <td data-sort-value="{% if ts_raw is not none %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
+                  <td data-sort-value="{{ p.get('Approved', '') }}">{{ p.get("Approved", "") }}</td>
                 </tr>
               {% endfor %}
             </tbody>
+            <tfoot>
+              <tr>
+                <th colspan="5" style="text-align:right">Total</th>
+                <th>{{ ns.total_amount|amount0 }}</th>
+                <th colspan="2"></th>
+              </tr>
+            </tfoot>
           </table>
         </div>
       {% else %}
-        <p class="muted">No status changes recorded yet.</p>
+        <p class="muted">No linked rows (re-run scenarios after import if empty).</p>
+      {% endif %}
+      {% if detection.import_batch_id %}
+      <div class="case-detail-tx-actions">
+        <button
+          type="button"
+          class="button secondary"
+          id="tx-popup-open-btn"
+          onclick="window.amlOpenTxPopup && window.amlOpenTxPopup({{ detection.import_batch_id }}, { msisdn: '{{ (metrics.get('WalletId','')|string)|e }}', card_id: '{{ (metrics.get('CardId','')|string)|e }}' }, this)"
+        >See more transactions</button>
+      </div>
       {% endif %}
     </div>
-  </details>
-  <div class="panel">
-    <h2>Change status</h2>
-    <p class="muted">Final step: set the case status when investigation on this detection is complete.</p>
-    {% if allowed_statuses %}
-      <form class="inline" method="post" action="/detections/{{ detection.id }}/status" onsubmit="amlFormBusy(this)">
-        <label>New status
-          <select name="to_status" required>
-            {% for s in allowed_statuses %}
-              <option value="{{ s }}">{{ status_labels.get(s, s) }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <p class="muted">Recorded as: {{ operator_display_name }}</p>
-        <div>
-          <button type="submit">Apply</button>
-          <span class="busy-hint" aria-live="polite">Updating status…</span>
+
+    <div class="case-detail-notes-status">
+      <div class="panel case-detail-notes">
+        <h2 style="margin-top: 0">Notes</h2>
+        <ul id="notes-list" class="notes-list">
+          {% for n in detection.notes %}
+            {% with note=n, detection_id=detection.id, can_edit=note_can_edit.get(n.id, false) %}
+              {% include "partials/note_row.html" %}
+            {% endwith %}
+          {% else %}
+            <li class="muted notes-empty">No notes yet — add investigation context below.</li>
+          {% endfor %}
+        </ul>
+        <form
+          class="case-detail-notes-compose"
+          hx-post="/detections/{{ detection.id }}/notes"
+          hx-target="#notes-list"
+          hx-swap="afterbegin"
+          hx-on::after-request="if(event.detail.successful) { this.reset(); var empty = document.querySelector('.notes-empty'); if (empty) empty.remove(); }"
+        >
+          <label>Note
+            <textarea name="body" required></textarea>
+          </label>
+          <p class="muted">Author: {{ operator_display_name }}</p>
+          <p><button type="submit">Add note</button></p>
+        </form>
+      </div>
+
+      <div
+        class="panel case-detail-status"
+        id="change-status"
+        data-current-status-label="{{ status_labels.get(detection.status, detection.status) }}"
+      >
+        <h2 style="margin-top: 0">Change status</h2>
+        {% if allowed_statuses %}
+          <p class="muted">{{ status_helper }}</p>
+          {% if status_quick_actions %}
+            <div class="status-quick-actions" aria-label="Quick status actions">
+              {% for skey, slabel in status_quick_actions %}
+                <form
+                  class="inline status-quick-form js-status-change-form"
+                  method="post"
+                  action="/detections/{{ detection.id }}/status"
+                  data-to-label="{{ slabel }}"
+                  onsubmit="return amlConfirmStatusChange(this, event)"
+                >
+                  <input type="hidden" name="to_status" value="{{ skey }}" />
+                  <button type="submit" class="button secondary">{{ slabel }}</button>
+                </form>
+              {% endfor %}
+            </div>
+          {% endif %}
+          <form
+            class="inline js-status-change-form"
+            method="post"
+            action="/detections/{{ detection.id }}/status"
+            onsubmit="return amlConfirmStatusChange(this, event)"
+          >
+            <label>New status
+              <select name="to_status" required>
+                {% for group_label, items in status_select_groups %}
+                  <optgroup label="{{ group_label }}">
+                    {% for s, slabel in items %}
+                      <option value="{{ s }}">{{ slabel }}</option>
+                    {% endfor %}
+                  </optgroup>
+                {% endfor %}
+              </select>
+            </label>
+            <p class="muted">Recorded as: {{ operator_display_name }}</p>
+            <div>
+              <button type="submit">Apply</button>
+              <span class="busy-hint" aria-live="polite">Updating status…</span>
+            </div>
+          </form>
+        {% else %}
+          <p class="muted">No further transitions (terminal state).</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="case-detail-reference">
+      {% if prior_wallet_tokens and prior_detections %}
+        <details class="panel panel-details">
+          <summary><strong>Previous detections (same MSISDN / wallet)</strong> <span class="muted">({{ prior_detections|length }})</span></summary>
+          <p class="muted">Matching wallet id(s): {{ prior_wallet_tokens | join(", ") }}</p>
+          <div class="scroll-x">
+            <table class="data js-sortable">
+              <thead>
+                <tr>
+                  <th class="th-sortable" data-sort-col="0" data-sort-type="number">Detection id</th>
+                  <th class="th-sortable" data-sort-col="1" data-sort-type="date" data-sort-default="desc">Created</th>
+                  <th class="th-sortable" data-sort-col="2" data-sort-type="text">Scenario</th>
+                  <th class="th-sortable" data-sort-col="3" data-sort-type="text">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for pid, pdt, psid, pstatus in prior_detections %}
+                  <tr>
+                    <td data-sort-value="{{ pid }}"><a href="/detections/{{ pid }}">{{ pid }}</a></td>
+                    <td class="muted" data-sort-value="{{ pdt.isoformat() if pdt else '' }}">{{ pdt | shortdt }}</td>
+                    <td data-sort-value="{{ psid }}">{{ scenario_labels.get(psid, psid) }}</td>
+                    <td data-sort-value="{{ pstatus }}"><span class="badge badge-status-{{ pstatus }}">{{ status_labels.get(pstatus, pstatus) }}</span></td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      {% endif %}
+
+      <details class="panel panel-details">
+        <summary>
+          <strong>Status change log</strong>
+          <span class="muted">
+            {% if detection.status_history %} ({{ detection.status_history|length }}){% endif %}
+          </span>
+        </summary>
+        <div class="panel-details-body">
+          {% if detection.status_history %}
+            <div class="scroll-x">
+              <table class="data js-sortable">
+                <thead>
+                  <tr>
+                    <th class="th-sortable" data-sort-col="0" data-sort-type="date" data-sort-default="desc">When</th>
+                    <th class="th-sortable" data-sort-col="1" data-sort-type="text">From</th>
+                    <th class="th-sortable" data-sort-col="2" data-sort-type="text">To</th>
+                    <th class="th-sortable" data-sort-col="3" data-sort-type="text">Actor</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for h in detection.status_history %}
+                    <tr>
+                      <td class="muted" data-sort-value="{{ h.created_at.isoformat() if h.created_at else '' }}">{{ h.created_at | shortdt }}</td>
+                      <td data-sort-value="{{ h.from_status or '' }}">{{ status_labels.get(h.from_status, h.from_status) if h.from_status else "—" }}</td>
+                      <td data-sort-value="{{ h.to_status or '' }}">{{ status_labels.get(h.to_status, h.to_status) }}</td>
+                      <td data-sort-value="{{ h.actor_name or '' }}">{{ h.actor_name or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="muted">No status changes recorded yet.</p>
+          {% endif %}
         </div>
-      </form>
-    {% else %}
-      <p class="muted">No further transitions (terminal state).</p>
-    {% endif %}
+      </details>
+    </div>
   </div>
 
-  <div id="tx-popup-overlay" class="modal-overlay" hidden>
-    <div class="modal-card">
+  <script>
+    window.amlConfirmStatusChange = function (form, ev) {
+      var panel = form.closest(".case-detail-status");
+      var fromLabel = panel ? panel.getAttribute("data-current-status-label") || "" : "";
+      var toLabel = form.getAttribute("data-to-label") || "";
+      var toInput = form.querySelector('[name="to_status"]');
+      var toVal = toInput ? toInput.value : "";
+      if (!toLabel && toInput && toInput.tagName === "SELECT" && toInput.selectedIndex >= 0) {
+        toLabel = toInput.options[toInput.selectedIndex].text;
+      }
+      if (!toVal) {
+        ev.preventDefault();
+        return false;
+      }
+      var msg =
+        "Change status from \"" +
+        fromLabel +
+        "\" to \"" +
+        toLabel +
+        "\"?\n\nMake sure you did not click by mistake.";
+      if (!window.confirm(msg)) {
+        ev.preventDefault();
+        if (window.amlLoadingEnd) window.amlLoadingEnd();
+        return false;
+      }
+      if (window.amlFormBusy) window.amlFormBusy(form);
+      return true;
+    };
+  </script>
+
+  <div
+    id="tx-popup-overlay"
+    class="modal-overlay"
+    hidden
+    aria-hidden="true"
+  >
+    <div
+      class="modal-card"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="tx-popup-title"
+      tabindex="-1"
+    >
+      <div id="tx-popup-live" class="visually-hidden" aria-live="polite"></div>
       <div id="tx-popup-body" class="modal-body">
-        <div class="muted">Loading…</div>
+        <div class="muted">Loading transactions…</div>
       </div>
     </div>
   </div>
@@ -239,14 +359,33 @@
     (function () {
       var overlay = document.getElementById("tx-popup-overlay");
       var body = document.getElementById("tx-popup-body");
+      var live = document.getElementById("tx-popup-live");
       if (!overlay || !body) return;
 
-      function close() {
-        overlay.hidden = true;
+      if (window.amlInitModal) {
+        window.amlInitModal(overlay, {
+          onClose: function () {
+            overlay.setAttribute("aria-hidden", "true");
+          },
+        });
       }
-      function open(batchId, opts) {
-        overlay.hidden = false;
-        body.innerHTML = '<div class="muted">Loading…</div>';
+
+      function close() {
+        if (window.amlCloseModalOverlay) window.amlCloseModalOverlay();
+        else overlay.hidden = true;
+        overlay.setAttribute("aria-hidden", "true");
+      }
+
+      function open(batchId, opts, trigger) {
+        if (live) live.textContent = "Loading transactions…";
+        body.innerHTML = '<div class="muted">Loading transactions…</div>';
+        overlay.setAttribute("aria-hidden", "false");
+        if (window.amlOpenModalOverlay) {
+          window.amlOpenModalOverlay(trigger);
+        } else {
+          overlay.hidden = false;
+        }
+
         var q = "";
         try {
           var params = new URLSearchParams();
@@ -260,18 +399,26 @@
           // no-op
         }
         if (window.htmx) {
-          window.htmx.ajax("GET", "/imports/" + batchId + "/transactions" + q, { target: "#tx-popup-body" });
+          window.htmx.ajax("GET", "/imports/" + batchId + "/transactions" + q, {
+            target: "#tx-popup-body",
+            swap: "innerHTML",
+          });
+          if (live) {
+            body.addEventListener(
+              "htmx:afterOnLoad",
+              function onLoaded(ev) {
+                if (ev.detail && ev.detail.target === body) {
+                  live.textContent = "Transactions loaded.";
+                  body.removeEventListener("htmx:afterOnLoad", onLoaded);
+                }
+              }
+            );
+          }
         }
       }
+
       window.amlOpenTxPopup = open;
       window.amlCloseTxPopup = close;
-
-      overlay.addEventListener("click", function (e) {
-        if (e.target === overlay) close();
-      });
-      document.addEventListener("keydown", function (e) {
-        if (e.key === "Escape") close();
-      });
 
       window.amlTxPage = function (n) {
         var form = document.getElementById("tx-filter-form");
