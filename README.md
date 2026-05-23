@@ -166,7 +166,6 @@ Before exposing beyond a trusted network:
 2. Terminate **HTTPS** at Nginx/Caddy ([example config](deploy/rhel9/nginx-aml-web.conf.example))
 3. Set `SECURE_COOKIES=true`; rotate `POSTGRES_PASSWORD`
 4. Keep web and DB on loopback; expose only the reverse proxy
-5. Never commit `.env`, `*.xlsx`, or credentials
 
 Full RHEL runbook: [deploy/rhel9/README.md](deploy/rhel9/README.md)
 
