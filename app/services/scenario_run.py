@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.constants import OPEN_DETECTION_STATUSES
 from app.models import Detection
 from app.services.import_service import dataframe_for_batch, dataframe_for_rolling_window, _ensure_repo_on_path
 from app.services.serialize import json_safe
@@ -125,6 +127,87 @@ def _rolling_detection_exists(
         """
     )
     return db.execute(stmt, bind).first() is not None
+
+
+def _rolling_key_field_for_scenario(scenario_id: str) -> str:
+    scen = str(scenario_id or "").strip().upper()
+    if scen == "W2":
+        return "CardId"
+    return "WalletId"
+
+
+def _collapse_rolling_det_rows(det: pd.DataFrame, scenario_id: str) -> pd.DataFrame:
+    """Keep one row per wallet/card with the latest rolling window end (TxnWeek)."""
+    if det is None or det.empty:
+        return det
+    sid = str(scenario_id or "").strip().upper()
+    group_col = "CardId" if sid == "W2" else "WalletId"
+    if group_col not in det.columns or "TxnWeek" not in det.columns:
+        return det
+    work = det.copy()
+    work["_txn_week_sort"] = pd.to_datetime(work["TxnWeek"], errors="coerce")
+    work = work.sort_values("_txn_week_sort", kind="mergesort")
+    collapsed = work.groupby(group_col, as_index=False, sort=False).last()
+    return collapsed.drop(columns=["_txn_week_sort"], errors="ignore")
+
+
+def _find_open_rolling_detection(
+    db: Session,
+    *,
+    period: str,
+    scenario_id: str,
+    key_field: str,
+    key_value: str,
+) -> Detection | None:
+    """Latest open rolling detection for the same scenario and wallet/card."""
+    sid = str(scenario_id or "").strip().upper()
+    per = str(period or "").strip().lower()
+    kf = str(key_field or "").strip()
+    kv = str(key_value or "").strip()
+    if not (sid and per and kf and kv):
+        return None
+    if kf not in {"WalletId", "CardId"}:
+        return None
+    open_statuses = list(OPEN_DETECTION_STATUSES)
+    if not open_statuses:
+        return None
+    stmt = text(
+        """
+        SELECT id
+        FROM detections
+        WHERE scope_type = 'rolling'
+          AND period = :per
+          AND scenario_id = :sid
+          AND status = ANY(:statuses)
+          AND trim(coalesce(metrics->>:kf, '')) = :kv
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+    row = db.execute(
+        stmt,
+        {"per": per, "sid": sid, "statuses": open_statuses, "kf": kf, "kv": kv},
+    ).first()
+    if not row:
+        return None
+    return db.get(Detection, int(row[0]))
+
+
+def _refresh_open_rolling_detection(
+    det: Detection,
+    *,
+    metrics_dict: dict[str, Any],
+    raw_idx: list[int],
+    scope_days: int,
+    as_of: datetime,
+) -> None:
+    """Update an open rolling case with latest window metrics and merged transaction links."""
+    existing = [int(x) for x in (det.raw_row_indices or [])]
+    merged = sorted(set(existing) | {int(x) for x in raw_idx})
+    det.raw_row_indices = merged
+    det.metrics = json_safe(metrics_dict)
+    det.scope_days = int(scope_days)
+    det.scope_as_of = as_of
 
 
 def _enrich_wallet_pipe(det: pd.DataFrame, raw: pd.DataFrame, keys: list[str], pipe_col: str) -> pd.DataFrame:
@@ -638,10 +721,12 @@ def run_scenarios_for_rolling(
             logging.getLogger(__name__).warning("Wallet profile fetch failed: %s", e)
 
     created = 0
+    refreshed = 0
     seen_idx_keys: set[tuple[int, ...]] = set()
     as_of = datetime.now(timezone.utc)
     for p_name, sid, det, raw, key_cols in results:
         det = enrich_detection_metrics_dataframe(det, wallet_profiles_df, city_mapping)
+        det = _collapse_rolling_det_rows(det, sid)
         for _, det_row in det.iterrows():
             scen = str(det_row["ScenarioId"]) if "ScenarioId" in det_row.index else sid
             raw_idx = _det_indices_for_row(
@@ -660,15 +745,27 @@ def run_scenarios_for_rolling(
             # Note: for rolling detections, apply_linked_row_totals_to_metrics uses df+raw_idx, but raw_idx is
             # TransactionRow.id, not _aml_row_index; so we skip the linked-total adjustment for rolling.
             metrics = json_safe(metrics_dict)
-            # Avoid duplicates across runs by checking if this logical rolling detection already exists.
             window_end = str(metrics_dict.get("TxnWeek") or "").strip()
-            if scen in {"W1", "W3"}:
-                key_field = "WalletId"
-            elif scen == "W2":
-                key_field = "CardId"
-            else:
-                key_field = "WalletId"
+            key_field = _rolling_key_field_for_scenario(scen)
             key_value = str(metrics_dict.get(key_field) or "").strip()
+            existing = _find_open_rolling_detection(
+                db,
+                period=p_name,
+                scenario_id=scen,
+                key_field=key_field,
+                key_value=key_value,
+            )
+            if existing:
+                _refresh_open_rolling_detection(
+                    existing,
+                    metrics_dict=metrics_dict,
+                    raw_idx=raw_idx,
+                    scope_days=int(days),
+                    as_of=as_of,
+                )
+                refreshed += 1
+                seen_idx_keys.add(idx_key)
+                continue
             if _rolling_detection_exists(
                 db,
                 period=p_name,
@@ -694,7 +791,7 @@ def run_scenarios_for_rolling(
             created += 1
 
     db.commit()
-    return {"ok": True, "detections_created": created}
+    return {"ok": True, "detections_created": created, "detections_refreshed": refreshed}
 
 
 def metrics_row(det: Detection) -> dict[str, object]:

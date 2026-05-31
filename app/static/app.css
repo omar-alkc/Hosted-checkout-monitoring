@@ -751,6 +751,46 @@ table.data tr:nth-child(even) td {
   white-space: nowrap;
 }
 
+.metric-msisdn-chips,
+.metric-city-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+
+.metric-msisdn-card {
+  display: inline-block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  background: rgba(91, 140, 255, 0.12);
+  color: #dbeafe;
+  border: 1px solid rgba(91, 140, 255, 0.35);
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.metric-city-chip {
+  display: inline-block;
+  padding: 0.22rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.15);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.metrics-summary-item dd .metric-msisdn-chips,
+.metrics-summary-item dd .metric-city-chips,
+.metrics-summary-item dd .metric-name-chips {
+  font-weight: 400;
+}
+
 form.inline {
   display: flex;
   flex-wrap: wrap;

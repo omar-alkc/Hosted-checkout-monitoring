@@ -896,10 +896,12 @@ def imports_run(
     # Automatic rolling weekly refresh after any successful run.
     rolling_err = None
     rolling_n = None
+    rolling_ref = None
     try:
         rres = run_scenarios_for_rolling(db, days=7, period="weekly")
         if rres.get("ok"):
             rolling_n = int(rres.get("detections_created") or 0)
+            rolling_ref = int(rres.get("detections_refreshed") or 0)
         else:
             rolling_err = str(rres.get("error") or "rolling run failed")
     except Exception as e:
@@ -915,10 +917,15 @@ def imports_run(
             status_code=303,
         )
     if rolling_n is not None:
-        return RedirectResponse(
-            url=f"/imports/{batch_id}?notice=scenarios_run&n={n}&rolling_weekly_n={rolling_n}",
-            status_code=303,
+        q = urlencode(
+            {
+                "notice": "scenarios_run",
+                "n": str(n),
+                "rolling_weekly_n": str(rolling_n),
+                "rolling_weekly_ref": str(rolling_ref or 0),
+            }
         )
+        return RedirectResponse(url=f"/imports/{batch_id}?{q}", status_code=303)
     return RedirectResponse(url=f"/imports/{batch_id}?notice=scenarios_run&n={n}", status_code=303)
 
 
@@ -985,7 +992,9 @@ def scenarios_run_rolling(
     if not res.get("ok"):
         return RedirectResponse(url=f"/scenarios?error={quote(str(res.get('error') or 'run failed'))}", status_code=303)
     n = int(res.get("detections_created") or 0)
-    return RedirectResponse(url=f"/detections?notice=rolling_run&scope=rolling&bulk_n={n}", status_code=303)
+    ref = int(res.get("detections_refreshed") or 0)
+    q = urlencode({"notice": "rolling_run", "scope": "rolling", "bulk_n": str(n), "bulk_ref": str(ref)})
+    return RedirectResponse(url=f"/detections?{q}", status_code=303)
 
 
 @router.get("/scenarios", response_class=HTMLResponse)

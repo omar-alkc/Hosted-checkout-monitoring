@@ -41,8 +41,8 @@
       <label>Approved
         <select name="approved">
           <option value="" {% if not approved_input %}selected{% endif %}>(any)</option>
-          <option value="true" {% if approved_input == 'true' %}selected{% endif %}>true</option>
-          <option value="false" {% if approved_input == 'false' %}selected{% endif %}>false</option>
+          <option value="true" {% if approved_input == 'true' %}selected{% endif %}>Yes</option>
+          <option value="false" {% if approved_input == 'false' %}selected{% endif %}>No</option>
         </select>
       </label>
       <label>Rows

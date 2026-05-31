@@ -443,6 +443,14 @@ def _skip_risk_metric_key(k: str, *, show_risk_block: bool) -> bool:
     return False
 
 
+def _hidden_metric_keys_for_detection(metrics: Mapping[str, Any]) -> frozenset[str]:
+    """Per-detection keys to omit from the detail metrics panel (redundant with another field)."""
+    hidden = set(HIDDEN_DETECTION_METRIC_KEYS)
+    if str(metrics.get("WalletHolderNamesPipe") or "").strip():
+        hidden.add("WalletHolderFullName")
+    return frozenset(hidden)
+
+
 def ordered_detection_metric_items(
     metrics: Mapping[str, Any] | None, *, scenario_id: str | None = None
 ) -> list[tuple[str, Any]]:
@@ -454,10 +462,12 @@ def ordered_detection_metric_items(
     risk_error = str(m.get("RiskError") or "").strip()
     suppress_risk_display = bool(risk_error)
 
+    hidden_keys = _hidden_metric_keys_for_detection(m)
+
     seen: set[str] = set()
     out: list[tuple[str, Any]] = []
     for k in DETECTION_METRICS_DISPLAY_ORDER:
-        if k in HIDDEN_DETECTION_METRIC_KEYS or k == "RiskError":
+        if k in hidden_keys or k == "RiskError":
             continue
         if _skip_risk_metric_key(k, show_risk_block=show_risk_block):
             continue
@@ -471,7 +481,7 @@ def ordered_detection_metric_items(
             out.append((k, m[k]))
             seen.add(k)
     for k in sorted(m.keys()):
-        if k in seen or k in HIDDEN_DETECTION_METRIC_KEYS or k == "RiskError":
+        if k in seen or k in hidden_keys or k == "RiskError":
             continue
         if _skip_risk_metric_key(k, show_risk_block=show_risk_block):
             continue

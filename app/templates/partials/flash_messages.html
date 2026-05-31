@@ -17,12 +17,30 @@
     "test_created": "Test detections created.",
     "test_deleted": "Test detections deleted.",
     "scenarios_run": "Scenarios run completed.",
+    "rolling_run": "Rolling weekly scenarios completed.",
     "logged_out": "You have been logged out.",
     "user_created": "User created.",
   } %}
   {% if notice == "scenarios_run" %}
     {% set n = (q.get('n') or '')|string %}
-    <div class="flash success flash-auto-dismiss" role="status">{{ labels.get(notice, notice) }}{% if n.strip() %} ({{ n }} detections created){% endif %}</div>
+    {% set rw_n = (q.get('rolling_weekly_n') or '')|string %}
+    {% set rw_ref = (q.get('rolling_weekly_ref') or '')|string %}
+    <div class="flash success flash-auto-dismiss" role="status">
+      {{ labels.get(notice, notice) }}
+      {% if n.strip() %} (batch: {{ n }} created){% endif %}
+      {% if rw_n.strip() or rw_ref.strip() %}
+        · rolling: {{ rw_n or '0' }} new{% if rw_ref.strip() and rw_ref != '0' %}, {{ rw_ref }} updated{% endif %}
+      {% endif %}
+    </div>
+  {% elif notice == "rolling_run" %}
+    {% set n = (q.get('bulk_n') or '')|string %}
+    {% set ref = (q.get('bulk_ref') or '')|string %}
+    <div class="flash success flash-auto-dismiss" role="status">
+      {{ labels.get(notice, notice) }}
+      {% if n.strip() or ref.strip() %}
+        ({{ n or '0' }} new{% if ref.strip() and ref != '0' %}, {{ ref }} updated{% endif %})
+      {% endif %}
+    </div>
   {% else %}
     <div class="flash success flash-auto-dismiss" role="status">{{ labels.get(notice, notice) }}</div>
   {% endif %}

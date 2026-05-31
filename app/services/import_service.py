@@ -440,8 +440,11 @@ def search_transactions_for_batch(
 
     if approved:
         a = approved.strip().lower()
-        if a in {"true", "false"}:
-            params["appr"] = a
+        if a in {"true", "yes", "1"}:
+            params["appr"] = "true"
+            where.append("lower(coalesce(transaction_rows.payload->>'Approved','')) = :appr")
+        elif a in {"false", "no", "0"}:
+            params["appr"] = "false"
             where.append("lower(coalesce(transaction_rows.payload->>'Approved','')) = :appr")
 
     if exclude_row_indices:

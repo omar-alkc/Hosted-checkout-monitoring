@@ -74,8 +74,12 @@
                       {{ v|shortdt }}
                     {% elif ('amount' in kl) or (kl == 'credit') or (kl == 'debit') %}
                       {{ v|amount0 }}
-                    {% elif k in ['CardHolderNamesPipe', 'WalletHolderNamesPipe', 'TopCardHolderName'] %}
-                      <div class="metric-name-chips">{{ v | name_pipe_chips }}</div>
+                    {% elif k in ['WalletIdsPipe', 'WalletId'] %}
+                      {{ v | msisdn_pipe_chips }}
+                    {% elif k in ['WalletCityNamesPipe', 'WalletCityName'] %}
+                      {{ v | city_pipe_chips }}
+                    {% elif k in ['CardHolderNamesPipe', 'WalletHolderFullName', 'WalletHolderNamesPipe', 'TopCardHolderName'] %}
+                      {{ v | name_pipe_chips }}
                     {% else %}
                       {% set v_disp = v | display_cell %}
                       {% if v_disp %}{{ v_disp }}{% else %}—{% endif %}
@@ -120,6 +124,7 @@
                 {% if a is not none and a != "" %}
                   {% set ns.total_amount = ns.total_amount + (a|float) %}
                 {% endif %}
+                {% set approved_disp = p.get("Approved") | yes_no %}
                 <tr>
                   <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
                   <td data-sort-value="{{ wallet_disp }}">{% if wallet_disp %}{{ wallet_disp }}{% else %}—{% endif %}</td>
@@ -128,7 +133,7 @@
                   <td data-sort-value="{{ bank_disp }}">{% if bank_disp %}{{ bank_disp }}{% else %}—{% endif %}</td>
                   <td data-sort-value="{{ p.get('Amount', '') }}">{{ p.get("Amount")|amount0 }}</td>
                   <td data-sort-value="{% if ts_raw is not none %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
-                  <td data-sort-value="{{ p.get('Approved', '') }}">{{ p.get("Approved", "") }}</td>
+                  <td data-sort-value="{{ approved_disp }}">{% if approved_disp %}{{ approved_disp }}{% else %}—{% endif %}</td>
                 </tr>
               {% endfor %}
             </tbody>

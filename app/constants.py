@@ -32,6 +32,7 @@ DETECTION_METRICS_DISPLAY_ORDER: tuple[str, ...] = (
 )
 
 # Stored on metrics but not shown on detection detail (redundant with another key).
+# WalletHolderFullName is also hidden per-detection when WalletHolderNamesPipe is present.
 HIDDEN_DETECTION_METRIC_KEYS: frozenset[str] = frozenset({"WalletHolderName"})
 
 # Short codes stored on Detection.scenario_id; shown in UI with these titles.

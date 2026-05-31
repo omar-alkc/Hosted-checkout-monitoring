@@ -21,6 +21,7 @@
         {% set card_disp = p.get("CardId") | display_cell %}
         {% set bank_disp = bank | display_cell %}
         {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
+        {% set approved_disp = p.get("Approved") | yes_no %}
         <tr>
           <td data-sort-value="{{ t.row_index }}">{{ t.row_index }}</td>
           <td data-sort-value="{{ wallet_disp }}">{% if wallet_disp %}{{ wallet_disp }}{% else %}—{% endif %}</td>
@@ -29,7 +30,7 @@
           <td data-sort-value="{{ bank_disp }}">{% if bank_disp %}{{ bank_disp }}{% else %}—{% endif %}</td>
           <td data-sort-value="{{ p.get('Amount','') }}">{{ p.get("Amount")|amount0 }}</td>
           <td data-sort-value="{% if ts_raw %}{{ ts_raw|string }}{% endif %}">{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
-          <td data-sort-value="{{ p.get('Approved','') }}">{{ p.get("Approved","") }}</td>
+          <td data-sort-value="{{ approved_disp }}">{% if approved_disp %}{{ approved_disp }}{% else %}—{% endif %}</td>
         </tr>
       {% endfor %}
       {% if not rows %}
