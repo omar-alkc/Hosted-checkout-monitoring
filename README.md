@@ -70,7 +70,25 @@ Do **not** run `start_app.cmd` at the same time — it also binds port 8000.
 3. Install deps: `pip install -r requirements.txt`
 4. Migrate: `python -m alembic upgrade head`
 5. Create admin: `python -m app.scripts.create_admin admin`
-6. Run app: `start_app.cmd` (Windows) or `./start_app.sh`
+6. Run app: `start_app.cmd` (Windows) or `./start_app.sh` (binds **127.0.0.1** only — local machine)
+
+### Listen on all interfaces (LAN access)
+
+`start_app.cmd` / `start_app.sh` use `--host 127.0.0.1`, so other PCs on the network cannot reach the app. To listen on every interface (from the project root, same Python env as setup):
+
+```bash
+python -m uvicorn app.main:app --reload --reload-exclude ".venv" --host 0.0.0.0 --port 8000
+```
+
+Then open `http://<this-machine-ip>:8000/` from another device on the same network (replace `<this-machine-ip>` with your LAN IP, e.g. `192.168.1.10`).
+
+**Notes:**
+
+- Allow inbound TCP **8000** in Windows Firewall (or your host firewall) if connections are blocked.
+- Do **not** run this at the same time as Docker Compose or `start_app.cmd` — all use port 8000.
+- For anything beyond local lab use, put **HTTPS** and access control in front; see [Production security (checklist)](#production-security-checklist).
+
+The Docker web service already binds `0.0.0.0` inside the container; Compose still publishes it on **127.0.0.1:8000** on the host unless you change `docker-compose.yml` port mapping.
 
 ---
 
@@ -88,6 +106,7 @@ Typical supervisor flow:
 2. Open the batch → **Run scenarios** (daily / weekly / both)  
 3. **Detections** — triage queue, filters, bulk status (supervisors)  
 4. **Scenario Manager** — thresholds and rolling weekly runs  
+5. **Settings → Workflow settings** — max days in **Pending evidence** before auto-escalation to **Suspicious (initial)** (default 10 days)
 
 Investigators work from **Detections** → open a case → review transactions/metrics → notes → change status.
 
@@ -180,6 +199,7 @@ Full RHEL runbook: [deploy/rhel9/README.md](deploy/rhel9/README.md)
 | `relation "users" does not exist` | Migrations not applied | `docker exec card_cashin_web python -m alembic upgrade head` (or re-run hybrid `alembic upgrade head`) |
 | Login works but no detections | No imports/scenarios yet | Log in as supervisor → **Imports** → upload Excel → run scenarios |
 | Port 8000 conflict | Docker + `start_app.cmd` both running | Use one mode only |
+| Other PC cannot open `:8000` | App bound to `127.0.0.1` only | Use `--host 0.0.0.0` (see [Listen on all interfaces](#listen-on-all-interfaces-lan-access)); check firewall |
 
 ---
 

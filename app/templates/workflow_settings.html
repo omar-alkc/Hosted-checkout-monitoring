@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/detections">← Detections</a></p>
+  <h1>Workflow settings</h1>
+  <p class="muted">
+    Configure how long a detection may remain in <strong>Pending evidence</strong> before it is
+    automatically moved to <strong>Suspicious (initial)</strong>. The detections list shows
+    <strong>Days in pending evidence</strong> for cases in that status.
+  </p>
+  {% if settings_saved %}
+    <div class="flash success flash-auto-dismiss" role="status">Settings saved.</div>
+  {% endif %}
+  {% if settings_error %}
+    <div class="error" role="alert">{{ settings_error }}</div>
+  {% endif %}
+
+  <div class="panel">
+    <form method="post" action="/supervisor/workflow-settings" onsubmit="amlFormBusy(this)">
+      <label>Max days in pending evidence
+        <input
+          type="number"
+          name="pending_evidence_max_days"
+          value="{{ pending_evidence_max_days }}"
+          min="0"
+          max="365"
+          step="1"
+          required
+        />
+      </label>
+      <p class="muted" style="margin-top:0.5rem">
+        Set to <strong>0</strong> to disable automatic escalation. Default is 10 calendar days (UTC).
+        Escalation runs when anyone opens the detections list.
+      </p>
+      <p><button type="submit">Save settings</button></p>
+    </form>
+  </div>
+{% endblock %}

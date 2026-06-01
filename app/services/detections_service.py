@@ -244,6 +244,26 @@ _PRIOR_DETECTION_COUNT_SQL = """
 )::int
 """
 
+# Calendar days in current pending_evidence stint (NULL when not in that status).
+_PENDING_EVIDENCE_DAYS_SQL = """
+CASE WHEN detections.status = 'pending_evidence' THEN
+  GREATEST(0, (
+    CURRENT_DATE - COALESCE(
+      (
+        SELECT (sh.created_at AT TIME ZONE 'UTC')::date
+        FROM status_history sh
+        WHERE sh.detection_id = detections.id
+          AND sh.to_status = 'pending_evidence'
+        ORDER BY sh.created_at DESC
+        LIMIT 1
+      ),
+      (detections.updated_at AT TIME ZONE 'UTC')::date,
+      (detections.created_at AT TIME ZONE 'UTC')::date
+    )
+  ))::int
+ELSE NULL END
+"""
+
 
 def list_detections_with_previous_count(
     db: Session,
@@ -261,13 +281,15 @@ def list_detections_with_previous_count(
     risk: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
-) -> list[tuple[Detection, int]]:
+) -> list[tuple[Detection, int, int | None]]:
     """
-    Like list_detections, but returns (Detection, previous_detection_count) where:
+    Like list_detections, but returns (Detection, previous_detection_count, pending_evidence_days) where:
     - wallet tokens come from metrics WalletId and WalletIdsPipe (same as detail page)
     - "previous" means any other detection sharing at least one token (any age / batch)
+    - pending_evidence_days is calendar days in current pending_evidence stint, or None
     """
     prev_count = literal_column(_PRIOR_DETECTION_COUNT_SQL).label("previous_detection_count")
+    pending_days = literal_column(_PENDING_EVIDENCE_DAYS_SQL).label("pending_evidence_days")
 
     stmt = _detections_stmt(
         db,
@@ -282,7 +304,11 @@ def list_detections_with_previous_count(
         detection_id=detection_id,
         msisdn=msisdn,
         risk=risk,
-    ).with_only_columns(Detection, prev_count.label("previous_detection_count"))
+    ).with_only_columns(
+        Detection,
+        prev_count.label("previous_detection_count"),
+        pending_days.label("pending_evidence_days"),
+    )
 
     if offset is not None:
         stmt = stmt.offset(int(offset))
@@ -290,9 +316,14 @@ def list_detections_with_previous_count(
         stmt = stmt.limit(int(limit))
 
     rows = list(db.execute(stmt).all())
-    out: list[tuple[Detection, int]] = []
-    for det, n in rows:
-        out.append((det, int(n or 0)))
+    out: list[tuple[Detection, int, int | None]] = []
+    for det, n, pd in rows:
+        pending_val: int | None
+        if pd is None:
+            pending_val = None
+        else:
+            pending_val = int(pd)
+        out.append((det, int(n or 0), pending_val))
     return out
 
 

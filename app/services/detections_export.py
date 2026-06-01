@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.services.detections_service import list_detections
+from app.services.detections_service import list_detections_with_previous_count
 from app.services.thresholds_service import scenario_label_map
 
 
@@ -41,7 +41,7 @@ def build_detections_export_workbook(
     risk: str | None = None,
 ) -> tuple[bytes, str]:
     """Return (xlsx_bytes, suggested_filename)."""
-    dets = list_detections(
+    det_rows_export = list_detections_with_previous_count(
         db,
         status=status,
         queue=queue,
@@ -61,7 +61,7 @@ def build_detections_export_workbook(
 
     det_rows: list[dict[str, Any]] = []
     labels = scenario_label_map(db)
-    for d in dets:
+    for d, _prev, pe_days in det_rows_export:
         m = dict(d.metrics or {})
         row: dict[str, Any] = {
             "id": d.id,
@@ -69,6 +69,7 @@ def build_detections_export_workbook(
             "scenario_name": labels.get(str(d.scenario_id).strip().upper(), d.scenario_id),
             "period": d.period,
             "status": d.status,
+            "pending_evidence_days": pe_days if pe_days is not None else "",
             "assigned_senior": d.assigned_senior or "",
             "import_batch_id": d.import_batch_id,
             "created_at": d.created_at,
@@ -79,14 +80,14 @@ def build_detections_export_workbook(
         det_rows.append({k: _excel_scalar(v) for k, v in row.items()})
 
     df_det = pd.DataFrame(det_rows)
-    if dets:
+    if det_rows_export:
         df_sum = (
             df_det.groupby(["scenario_id", "status", "period"], dropna=False)
             .size()
             .reset_index(name="count")
             .sort_values(["scenario_id", "status", "period"])
         )
-        total = int(len(dets))
+        total = int(len(det_rows_export))
     else:
         df_sum = pd.DataFrame(columns=["scenario_id", "status", "period", "count"])
         total = 0

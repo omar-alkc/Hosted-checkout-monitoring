@@ -155,6 +155,7 @@ class InvestigatorStatusPolicy(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     allowed_map: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    pending_evidence_max_days: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

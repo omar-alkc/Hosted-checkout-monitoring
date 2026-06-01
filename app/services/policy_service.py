@@ -6,6 +6,9 @@ from app.constants import ALLOWED_TRANSITIONS, STATUS_KEYS
 from app.models import InvestigatorStatusPolicy
 
 _POLICY_SINGLETON_ID = 1
+_PENDING_EVIDENCE_MAX_DAYS_DEFAULT = 10
+_PENDING_EVIDENCE_MAX_DAYS_MIN = 0
+_PENDING_EVIDENCE_MAX_DAYS_MAX = 365
 
 
 def _validate_allowed_map(raw: dict) -> dict[str, list[str]]:
@@ -52,3 +55,40 @@ def investigator_effective_targets(db: Session, *, from_status: str, workflow_ta
     m = get_allowed_map(db)
     allowed = set(m.get(from_status, []))
     return workflow_targets & allowed
+
+
+def _get_or_create_policy_row(db: Session) -> InvestigatorStatusPolicy:
+    row = db.get(InvestigatorStatusPolicy, _POLICY_SINGLETON_ID)
+    if row is None:
+        row = InvestigatorStatusPolicy(
+            id=_POLICY_SINGLETON_ID,
+            allowed_map={},
+            pending_evidence_max_days=_PENDING_EVIDENCE_MAX_DAYS_DEFAULT,
+        )
+        db.add(row)
+        db.flush()
+    return row
+
+
+def get_pending_evidence_max_days(db: Session) -> int:
+    row = db.get(InvestigatorStatusPolicy, _POLICY_SINGLETON_ID)
+    if row is None:
+        return _PENDING_EVIDENCE_MAX_DAYS_DEFAULT
+    try:
+        return int(row.pending_evidence_max_days)
+    except (TypeError, ValueError):
+        return _PENDING_EVIDENCE_MAX_DAYS_DEFAULT
+
+
+def set_pending_evidence_max_days(db: Session, days: int) -> int:
+    n = int(days)
+    if n < _PENDING_EVIDENCE_MAX_DAYS_MIN or n > _PENDING_EVIDENCE_MAX_DAYS_MAX:
+        raise ValueError(
+            f"Max days must be between {_PENDING_EVIDENCE_MAX_DAYS_MIN} and {_PENDING_EVIDENCE_MAX_DAYS_MAX} "
+            f"(0 disables auto-escalation)."
+        )
+    row = _get_or_create_policy_row(db)
+    row.pending_evidence_max_days = n
+    db.commit()
+    db.refresh(row)
+    return n

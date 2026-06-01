@@ -691,6 +691,11 @@ table.data tr:nth-child(even) td {
   border-color: #166534;
 }
 
+td.pending-evidence-overdue {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
 .badge.badge-status-pending_evidence {
   background: rgba(245, 165, 36, 0.16);
   color: #fde68a;

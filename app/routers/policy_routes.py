@@ -12,7 +12,12 @@ from app.constants import ALLOWED_TRANSITIONS, STATUS_KEYS, STATUS_LABELS
 from app.database import get_db
 from app.deps.auth import require_supervisor
 from app.models import User
-from app.services.policy_service import get_allowed_map, set_allowed_map
+from app.services.policy_service import (
+    get_allowed_map,
+    get_pending_evidence_max_days,
+    set_allowed_map,
+    set_pending_evidence_max_days,
+)
 from app.template_ctx import template_ctx
 
 router = APIRouter(prefix="/supervisor", tags=["policy"])
@@ -77,3 +82,46 @@ async def investigator_policy_post(
     except Exception as ex:
         return RedirectResponse(url="/supervisor/investigator-policy?error=" + quote(str(ex)), status_code=303)
     return RedirectResponse(url="/supervisor/investigator-policy?saved=1", status_code=303)
+
+
+@router.get("/workflow-settings", response_class=HTMLResponse)
+def workflow_settings_get(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_supervisor),
+    saved: str | None = Query(None),
+    error: str | None = Query(None),
+):
+    return templates.TemplateResponse(
+        request,
+        "workflow_settings.html",
+        template_ctx(
+            request,
+            current_user=user,
+            pending_evidence_max_days=get_pending_evidence_max_days(db),
+            settings_saved=(saved or "").strip() == "1",
+            settings_error=(error or "").strip() or None,
+        ),
+    )
+
+
+@router.post("/workflow-settings", response_class=HTMLResponse)
+async def workflow_settings_post(
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_supervisor),
+):
+    form = await request.form()
+    raw = str(form.get("pending_evidence_max_days") or "").strip()
+    try:
+        days = int(raw)
+    except ValueError:
+        return RedirectResponse(
+            url="/supervisor/workflow-settings?error=" + quote("Enter a whole number of days (0–365)."),
+            status_code=303,
+        )
+    try:
+        set_pending_evidence_max_days(db, days)
+    except ValueError as ex:
+        return RedirectResponse(url="/supervisor/workflow-settings?error=" + quote(str(ex)), status_code=303)
+    return RedirectResponse(url="/supervisor/workflow-settings?saved=1", status_code=303)

@@ -42,6 +42,8 @@ from app.services.detections_service import (
     wallet_tokens_for_prior_lookup,
 )
 from app.services.import_service import parse_upload_to_batch, search_transactions_for_batch
+from app.services.pending_evidence_sla import apply_pending_evidence_auto_escalation
+from app.services.policy_service import get_pending_evidence_max_days
 from app.services.note_permissions import can_modify_note
 from app.services.external_enrichment_retry import retry_wallet_and_risk_enrichment
 from app.services.scenario_run import metrics_row, run_scenarios_for_batch, run_scenarios_for_rolling, run_single_scenario_for_batch
@@ -187,6 +189,9 @@ def detections_list(
     export_query = urlencode(export_q)
     labels = scenario_label_map(db)
 
+    apply_pending_evidence_auto_escalation(db)
+    pending_evidence_max_days = get_pending_evidence_max_days(db)
+
     total = count_detections(
         db,
         status=status,
@@ -221,8 +226,9 @@ def detections_list(
         limit=pp,
         offset=offset,
     )
-    previous_counts = {d.id: n for d, n in det_pairs}
-    dets = [d for d, _n in det_pairs]
+    previous_counts = {d.id: n for d, n, _pd in det_pairs}
+    pending_evidence_days = {d.id: pd for d, _n, pd in det_pairs}
+    dets = [d for d, _n, _pd in det_pairs]
 
     base_q = dict(export_q)
     base_q.pop("page", None)
@@ -243,6 +249,8 @@ def detections_list(
             show_import_links=user.role == "supervisor",
             detections=dets,
             previous_counts=previous_counts,
+            pending_evidence_days=pending_evidence_days,
+            pending_evidence_max_days=pending_evidence_max_days,
             status_filter=status,
             queue_filter=queue_in,
             assigned_filter=assigned_in,
@@ -385,6 +393,7 @@ def detection_detail(
         .where(Detection.id == detection_id)
         .options(selectinload(Detection.notes), selectinload(Detection.status_history))
     )
+    apply_pending_evidence_auto_escalation(db)
     det = db.scalars(stmt).first()
     if det is None:
         raise HTTPException(status_code=404)

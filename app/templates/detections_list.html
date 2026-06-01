@@ -116,9 +116,10 @@
             <th class="th-sortable" data-sort-col="4" data-sort-type="number">Previous detection count</th>
             <th class="th-sortable" data-sort-col="5" data-sort-type="text">Risk</th>
             <th class="th-sortable" data-sort-col="6" data-sort-type="text">Status</th>
-            <th class="th-sortable" data-sort-col="7" data-sort-type="text">Assigned to</th>
-            <th class="th-sortable" data-sort-col="8" data-sort-type="date">Created at</th>
-            <th class="th-sortable" data-sort-col="9" data-sort-type="date" data-sort-default="desc">Updated</th>
+            <th class="th-sortable" data-sort-col="7" data-sort-type="number">Days pending evidence</th>
+            <th class="th-sortable" data-sort-col="8" data-sort-type="text">Assigned to</th>
+            <th class="th-sortable" data-sort-col="9" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="10" data-sort-type="date" data-sort-default="desc">Updated</th>
           </tr>
           {% else %}
           <tr>
@@ -128,9 +129,10 @@
             <th class="th-sortable" data-sort-col="3" data-sort-type="number">Previous detection count</th>
             <th class="th-sortable" data-sort-col="4" data-sort-type="text">Risk</th>
             <th class="th-sortable" data-sort-col="5" data-sort-type="text">Status</th>
-            <th class="th-sortable" data-sort-col="6" data-sort-type="text">Assigned to</th>
-            <th class="th-sortable" data-sort-col="7" data-sort-type="date">Created at</th>
-            <th class="th-sortable" data-sort-col="8" data-sort-type="date" data-sort-default="desc">Updated</th>
+            <th class="th-sortable" data-sort-col="6" data-sort-type="number">Days pending evidence</th>
+            <th class="th-sortable" data-sort-col="7" data-sort-type="text">Assigned to</th>
+            <th class="th-sortable" data-sort-col="8" data-sort-type="date">Created at</th>
+            <th class="th-sortable" data-sort-col="9" data-sort-type="date" data-sort-default="desc">Updated</th>
           </tr>
           {% endif %}
         </thead>
@@ -155,6 +157,16 @@
               <td data-sort-value="{{ d.status }}">
                 <span class="badge badge-status-{{ d.status }}">{{ status_labels.get(d.status, d.status) }}</span>
               </td>
+              {% set _pe_days = pending_evidence_days.get(d.id) %}
+              <td
+                data-sort-value="{% if _pe_days is not none %}{{ _pe_days }}{% endif %}"
+                {% if _pe_days is not none and pending_evidence_max_days > 0 and _pe_days >= pending_evidence_max_days %}
+                  class="pending-evidence-overdue"
+                  title="At or over {{ pending_evidence_max_days }}-day limit; will auto-escalate to Suspicious (initial)"
+                {% endif %}
+              >
+                {% if _pe_days is not none %}{{ _pe_days }}{% else %}—{% endif %}
+              </td>
               <td data-sort-value="{{ d.assigned_senior or '' }}">{{ d.assigned_senior or "—" }}</td>
               {% set _scope = (d.scope_type or 'batch')|string|trim|lower %}
               {% set _when = "" %}
@@ -175,7 +187,7 @@
           {% endfor %}
           {% if not detections %}
             <tr>
-              <td colspan="{% if show_bulk %}10{% else %}9{% endif %}" class="muted">
+              <td colspan="{% if show_bulk %}11{% else %}10{% endif %}" class="muted">
                 {% if show_import_links %}
                   No detections yet. Upload transactions and run scenarios from Imports.
                 {% else %}
