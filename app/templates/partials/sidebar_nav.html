@@ -53,6 +53,8 @@
         </span>
         <span class="sidebar-label">Scenario Manager</span>
       </a>
+    {% endif %}
+    {% if current_user.role in ('supervisor', 'investigator') %}
       <a
         class="sidebar-link{% if path_norm == '/transactions' %} is-active{% endif %}"
         href="/transactions"

@@ -38,6 +38,7 @@ def build_detections_export_workbook(
     assigned: str | None = None,
     detection_id: int | None = None,
     msisdn: str | None = None,
+    card_id: str | None = None,
     risk: str | None = None,
 ) -> tuple[bytes, str]:
     """Return (xlsx_bytes, suggested_filename)."""
@@ -53,6 +54,7 @@ def build_detections_export_workbook(
         assigned=assigned,
         detection_id=detection_id,
         msisdn=msisdn,
+        card_id=card_id,
         risk=risk,
     )
 
@@ -106,6 +108,7 @@ def build_detections_export_workbook(
             {"key": "filter_assigned", "value": assigned or ""},
             {"key": "filter_detection_id", "value": detection_id if detection_id is not None else ""},
             {"key": "filter_msisdn", "value": msisdn or ""},
+            {"key": "filter_card_id", "value": card_id or ""},
             {"key": "filter_risk", "value": risk or ""},
         ]
     )

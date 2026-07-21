@@ -6,9 +6,11 @@ DETECTION_METRICS_DISPLAY_ORDER: tuple[str, ...] = (
     "CardHolderNamesPipe",
     "WalletHolderFullName",
     "WalletHolderNamesPipe",
-    "WalletId",
+    "WalletGovernorate",
+    "WalletGovernoratesPipe",
+    "WalletCityName",
     "WalletIdsPipe",
-    "TopCardHolderName",
+    "WalletId",
     "TopCardId",
     "TopCardTotalAmount",
     "MinAmount",
@@ -35,6 +37,28 @@ DETECTION_METRICS_DISPLAY_ORDER: tuple[str, ...] = (
 # WalletHolderFullName is also hidden per-detection when WalletHolderNamesPipe is present.
 HIDDEN_DETECTION_METRIC_KEYS: frozenset[str] = frozenset({"WalletHolderName"})
 
+# Iraq governorate codes (actors_clean1_clone.city) → display name.
+GOVERNORATE_CODE_MAP: dict[str, str] = {
+    "IQ01": "Al Anbar",
+    "IQ02": "Babil",
+    "IQ03": "Baghdad",
+    "IQ04": "Al Basrah",
+    "IQ05": "Dhi Qar",
+    "IQ06": "Diyala",
+    "IQ07": "Dohuk",
+    "IQ08": "Erbil",
+    "IQ09": "Karbala",
+    "IQ10": "Kirkuk",
+    "IQ11": "Maysan",
+    "IQ12": "Al Muthanna",
+    "IQ13": "Al Najaf",
+    "IQ14": "Ninawa",
+    "IQ15": "Al Qadisiyah",
+    "IQ16": "Salah Al Din",
+    "IQ17": "Al Sulaimaniyah",
+    "IQ18": "Wasit",
+}
+
 # Short codes stored on Detection.scenario_id; shown in UI with these titles.
 SCENARIO_LABELS: dict[str, str] = {
     "D1": "D1: Many cards - One wallet",
@@ -53,6 +77,8 @@ METRIC_KEY_LABELS: dict[str, str] = {
     "CardHolderNamesPipe": "Card Holder Names",
     "WalletHolderFullName": "Wallet holder full name",
     "WalletCityName": "Wallet residency city",
+    "WalletGovernorate": "Governorate",
+    "WalletGovernoratesPipe": "Governorates",
     "WalletHolderNamesPipe": "Wallet holder names",
     "WalletCityNamesPipe": "Wallet residency cities",
     "TopCardId": "Top card ID",

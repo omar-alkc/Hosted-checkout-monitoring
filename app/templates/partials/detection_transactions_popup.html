@@ -1,0 +1,59 @@
+<div class="tx-popup-inner detection-tx-popup">
+  <div class="tx-popup-head">
+    <h2 style="margin:0" id="tx-popup-title">See more transactions</h2>
+    <button type="button" class="button secondary tx-popup-close" aria-label="Close" onclick="window.amlCloseTxPopup && window.amlCloseTxPopup()">×</button>
+  </div>
+
+  <div class="det-tx-tabs" role="tablist" aria-label="Transaction sources">
+    <button
+      type="button"
+      class="det-tx-tab{% if active_tab == 'hosted' %} is-active{% endif %}"
+      role="tab"
+      aria-selected="{% if active_tab == 'hosted' %}true{% else %}false{% endif %}"
+      aria-controls="det-tx-tab-panel"
+      data-tab="hosted"
+      hx-get="/detections/{{ detection_id }}/hosted-transactions?msisdn={{ default_msisdn|urlencode }}&card_id={{ default_card_id|urlencode }}{% if default_batch_id %}&batch_id={{ default_batch_id }}{% endif %}"
+      hx-target="#det-tx-tab-panel"
+      hx-swap="innerHTML"
+    >Hosted checkout transactions</button>
+    <button
+      type="button"
+      class="det-tx-tab{% if active_tab == 'wallet' %} is-active{% endif %}"
+      role="tab"
+      aria-selected="{% if active_tab == 'wallet' %}true{% else %}false{% endif %}"
+      aria-controls="det-tx-tab-panel"
+      data-tab="wallet"
+      hx-get="/detections/{{ detection_id }}/minitrans-transactions"
+      hx-target="#det-tx-tab-panel"
+      hx-swap="innerHTML"
+    >Wallet transactions</button>
+  </div>
+
+  <div
+    id="det-tx-tab-panel"
+    class="det-tx-tab-panel"
+    role="tabpanel"
+    hx-get="/detections/{{ detection_id }}/hosted-transactions?msisdn={{ default_msisdn|urlencode }}&card_id={{ default_card_id|urlencode }}{% if default_batch_id %}&batch_id={{ default_batch_id }}{% endif %}"
+    hx-trigger="load"
+    hx-swap="innerHTML"
+  >
+    <div class="muted">Loading…</div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    var root = document.querySelector(".detection-tx-popup");
+    if (!root) return;
+    root.querySelectorAll(".det-tx-tab").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        root.querySelectorAll(".det-tx-tab").forEach(function (b) {
+          b.classList.remove("is-active");
+          b.setAttribute("aria-selected", "false");
+        });
+        btn.classList.add("is-active");
+        btn.setAttribute("aria-selected", "true");
+      });
+    });
+  })();
+</script>

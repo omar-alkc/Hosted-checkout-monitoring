@@ -45,6 +45,43 @@ class TransactionRow(Base):
     batch: Mapped[ImportBatch] = relationship(back_populates="transactions")
 
 
+class ScenarioGroupType(str, enum.Enum):
+    many_cards_one_wallet = "many_cards_one_wallet"
+    one_card_many_wallets = "one_card_many_wallets"
+    one_card_one_wallet = "one_card_one_wallet"
+    multiple_failed = "multiple_failed"
+
+
+class ScenarioPeriodUnit(str, enum.Enum):
+    hour = "hour"
+    day = "day"
+    week = "week"
+    month = "month"
+
+
+class Scenario(Base):
+    """Dynamic scenario definition (replaces fixed D1–W3 registry for runtime)."""
+
+    __tablename__ = "scenarios"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    group_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    period_unit: Mapped[str] = mapped_column(String(16), nullable=False, default=ScenarioPeriodUnit.day.value)
+    period_value: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    thresholds: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    monitored_bank: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    transaction_filter: Mapped[str] = mapped_column(String(32), nullable=False, default="approved_only")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ScenarioConfig(Base):
     __tablename__ = "scenario_config"
 
@@ -86,7 +123,7 @@ class Detection(Base):
     scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="batch", index=True)
     scope_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scope_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    scenario_id: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    scenario_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     period: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="new", index=True)
     assigned_senior: Mapped[str | None] = mapped_column(String(256), nullable=True)

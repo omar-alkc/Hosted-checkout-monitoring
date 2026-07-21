@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -548,6 +549,163 @@ def fetch_post_card_debit_transactions(
     df = pd.DataFrame(out_rows, columns=cols)
     if not df.empty and "timestamp" in df.columns:
         df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    return df
+
+
+def fetch_wallet_transactions_range(
+    msisdns: Sequence[str],
+    dt_from: datetime | None,
+    dt_to: datetime | None,
+    chunk_size: int = 500,
+) -> pd.DataFrame:
+    """
+    Fetch minitrans_clone rows for wallets within [dt_from, dt_to] (either bound optional).
+    Matches rows where creditedMSISDN or debitedMSISDN is in the wallet list.
+    """
+    try:
+        import pymysql
+    except ImportError as e:
+        raise ImportError("pymysql is required for DB lookup. Install it in your Python environment.") from e
+
+    host, port, user, password, database = _minitrans_connect_params()
+    msisdns = sorted({str(m).strip() for m in msisdns if m is not None and str(m).strip() and str(m).lower() != "nan"})
+    cols = [
+        "timestamp",
+        "transactionId",
+        "transactionAmount",
+        "creditedMSISDN",
+        "debitedMSISDN",
+        "transactionType",
+        "transactionDescription",
+        "AdditionalParameter",
+    ]
+    if not msisdns:
+        return pd.DataFrame(columns=cols)
+
+    start = None
+    end = None
+    if dt_from is not None:
+        start = pd.to_datetime(dt_from, errors="coerce")
+        if pd.notna(start):
+            start = start.strftime("%Y-%m-%d %H:%M:%S")
+    if dt_to is not None:
+        end = pd.to_datetime(dt_to, errors="coerce")
+        if pd.notna(end):
+            end = end.strftime("%Y-%m-%d %H:%M:%S")
+
+    out_rows: List[Tuple] = []
+    conn = pymysql.connect(
+        **_minitrans_connect_kwargs(host, port, user, password, database),
+        cursorclass=pymysql.cursors.Cursor,
+    )
+    n_chunks = (len(msisdns) + chunk_size - 1) // chunk_size
+    try:
+        with conn.cursor() as cur:
+            for ci, i in enumerate(range(0, len(msisdns), chunk_size), start=1):
+                chunk = msisdns[i : i + chunk_size]
+                print(
+                    f"  [DB] minitrans_clone (range): chunk {ci}/{n_chunks} ({len(chunk)} MSISDNs) ...",
+                    flush=True,
+                )
+                placeholders = ",".join(["%s"] * len(chunk))
+                where = [f"(creditedMSISDN in ({placeholders}) or debitedMSISDN in ({placeholders}))"]
+                params: list = list(chunk + chunk)
+                if start:
+                    where.append("timestamp >= %s")
+                    params.append(start)
+                if end:
+                    where.append("timestamp <= %s")
+                    params.append(end)
+                sql = (
+                    "select timestamp, transactionId, transactionAmount, creditedMSISDN, debitedMSISDN, "
+                    "transactionType, transactionDescription, AdditionalParameter "
+                    "from minitrans_clone "
+                    f"where {' and '.join(where)}"
+                )
+                cur.execute(sql, tuple(params))
+                out_rows.extend(cur.fetchall())
+    finally:
+        conn.close()
+
+    df = pd.DataFrame(out_rows, columns=cols)
+    if not df.empty and "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df = df.sort_values("timestamp", kind="mergesort")
+    return df
+
+
+def fetch_wallet_transactions_in_window(
+    msisdns: Sequence[str],
+    anchor_ts: str,
+    window_unit: str,
+    window_value: int,
+    chunk_size: int = 500,
+) -> pd.DataFrame:
+    """
+    Fetch minitrans_clone rows for wallets within a symmetric window around anchor_ts.
+
+    Window: [anchor - period, anchor + period] where period = window_value × window_unit.
+    """
+    try:
+        import pymysql
+    except ImportError as e:
+        raise ImportError("pymysql is required for DB lookup. Install it in your Python environment.") from e
+
+    from scenarios import period_lookback
+
+    host, port, user, password, database = _minitrans_connect_params()
+    msisdns = sorted({str(m).strip() for m in msisdns if m is not None and str(m).strip() and str(m).lower() != "nan"})
+    cols = [
+        "timestamp",
+        "transactionId",
+        "transactionAmount",
+        "creditedMSISDN",
+        "debitedMSISDN",
+        "transactionType",
+        "transactionDescription",
+        "AdditionalParameter",
+    ]
+    if not msisdns:
+        return pd.DataFrame(columns=cols)
+
+    anchor = pd.to_datetime(anchor_ts, errors="coerce")
+    if pd.isna(anchor):
+        raise ValueError("Invalid anchor timestamp.")
+    half = period_lookback(window_unit, window_value)
+    start = (anchor - half).strftime("%Y-%m-%d %H:%M:%S")
+    end = (anchor + half).strftime("%Y-%m-%d %H:%M:%S")
+
+    out_rows: List[Tuple] = []
+    conn = pymysql.connect(
+        **_minitrans_connect_kwargs(host, port, user, password, database),
+        cursorclass=pymysql.cursors.Cursor,
+    )
+    n_chunks = (len(msisdns) + chunk_size - 1) // chunk_size
+    try:
+        with conn.cursor() as cur:
+            for ci, i in enumerate(range(0, len(msisdns), chunk_size), start=1):
+                chunk = msisdns[i : i + chunk_size]
+                print(
+                    f"  [DB] minitrans_clone (window): chunk {ci}/{n_chunks} ({len(chunk)} MSISDNs) ...",
+                    flush=True,
+                )
+                placeholders = ",".join(["%s"] * len(chunk))
+                sql = (
+                    "select timestamp, transactionId, transactionAmount, creditedMSISDN, debitedMSISDN, "
+                    "transactionType, transactionDescription, AdditionalParameter "
+                    "from minitrans_clone "
+                    "where timestamp >= %s and timestamp <= %s "
+                    f"  and (creditedMSISDN in ({placeholders}) or debitedMSISDN in ({placeholders}))"
+                )
+                cur.execute(sql, tuple([start, end] + chunk + chunk))
+                out_rows.extend(cur.fetchall())
+    finally:
+        conn.close()
+
+    df = pd.DataFrame(out_rows, columns=cols)
+    if not df.empty and "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df = df.sort_values("timestamp", kind="mergesort")
     return df
 
 

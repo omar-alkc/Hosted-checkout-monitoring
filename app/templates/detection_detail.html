@@ -27,7 +27,7 @@
   </div>
 
   <div class="case-detail">
-    {% set summary_keys = ['WalletId', 'Risk', 'TotalAmount', 'TxnCount', 'UniqueCards', 'UniqueWallets'] %}
+    {% set summary_keys = ['WalletId', 'WalletGovernorate', 'Risk', 'TotalAmount', 'TxnCount', 'UniqueCards', 'UniqueWallets'] %}
     <div class="panel case-detail-metrics metrics-summary-panel">
       <h2 style="margin-top: 0">Key metrics</h2>
       <dl class="metrics-summary-grid">
@@ -76,7 +76,7 @@
                       {{ v|amount0 }}
                     {% elif k in ['WalletIdsPipe', 'WalletId'] %}
                       {{ v | msisdn_pipe_chips }}
-                    {% elif k in ['WalletCityNamesPipe', 'WalletCityName'] %}
+                    {% elif k in ['WalletCityNamesPipe', 'WalletCityName', 'WalletGovernoratesPipe', 'WalletGovernorate'] %}
                       {{ v | city_pipe_chips }}
                     {% elif k in ['CardHolderNamesPipe', 'WalletHolderFullName', 'WalletHolderNamesPipe', 'TopCardHolderName'] %}
                       {{ v | name_pipe_chips }}
@@ -149,16 +149,14 @@
       {% else %}
         <p class="muted">No linked rows (re-run scenarios after import if empty).</p>
       {% endif %}
-      {% if detection.import_batch_id %}
       <div class="case-detail-tx-actions">
         <button
           type="button"
           class="button secondary"
           id="tx-popup-open-btn"
-          onclick="window.amlOpenTxPopup && window.amlOpenTxPopup({{ detection.import_batch_id }}, { msisdn: '{{ (metrics.get('WalletId','')|string)|e }}', card_id: '{{ (metrics.get('CardId','')|string)|e }}' }, this)"
+          onclick="window.amlOpenDetectionTxPopup && window.amlOpenDetectionTxPopup({{ detection.id }}, { msisdn: '{{ (metrics.get('WalletId','')|string)|e }}', card_id: '{{ (metrics.get('CardId','')|string)|e }}' }, this)"
         >See more transactions</button>
       </div>
-      {% endif %}
     </div>
 
     <div class="case-detail-notes-status">
@@ -381,7 +379,7 @@
         overlay.setAttribute("aria-hidden", "true");
       }
 
-      function open(batchId, opts, trigger) {
+      function openDetectionTxPopup(detectionId, opts, trigger) {
         if (live) live.textContent = "Loading transactions…";
         body.innerHTML = '<div class="muted">Loading transactions…</div>';
         overlay.setAttribute("aria-hidden", "false");
@@ -390,39 +388,63 @@
         } else {
           overlay.hidden = false;
         }
-
         var q = "";
         try {
           var params = new URLSearchParams();
-          params.set("per_page", "20");
-          params.set("page", "1");
-          if (opts && opts.msisdn) params.set("msisdn", String(opts.msisdn));
-          if (opts && opts.card_id) params.set("card_id", String(opts.card_id));
-          if (opts && opts.exclude_indices) params.set("exclude_indices", String(opts.exclude_indices));
+          params.set("tab", "hosted");
           q = "?" + params.toString();
         } catch (e) {
           // no-op
         }
         if (window.htmx) {
-          window.htmx.ajax("GET", "/imports/" + batchId + "/transactions" + q, {
+          window.htmx.ajax("GET", "/detections/" + detectionId + "/transactions-popup" + q, {
             target: "#tx-popup-body",
             swap: "innerHTML",
           });
-          if (live) {
-            body.addEventListener(
-              "htmx:afterOnLoad",
-              function onLoaded(ev) {
-                if (ev.detail && ev.detail.target === body) {
-                  live.textContent = "Transactions loaded.";
-                  body.removeEventListener("htmx:afterOnLoad", onLoaded);
-                }
-              }
-            );
-          }
         }
       }
 
-      window.amlOpenTxPopup = open;
+      window.amlOpenDetectionTxPopup = openDetectionTxPopup;
+      window.amlOpenTxPopup = openDetectionTxPopup;
+
+      window.amlDetHostedPage = function (n) {
+        var form = document.getElementById("det-hosted-tx-form");
+        if (!form) return;
+        var pageInput = form.querySelector('input[name="page"]');
+        if (!pageInput) return;
+        pageInput.value = String(n);
+        form.requestSubmit();
+      };
+
+      window.amlDetWalletPage = function (n) {
+        var form = document.getElementById("det-minitrans-form");
+        if (!form) return;
+        var pageInput = form.querySelector('input[name="page"]');
+        if (!pageInput) return;
+        pageInput.value = String(n);
+        form.requestSubmit();
+      };
+
+      window.amlDetTxSort = function (formId, col) {
+        var form = document.getElementById(formId);
+        if (!form) return;
+        var sortBy = form.querySelector('input[name="sort_by"]');
+        var sortDir = form.querySelector('input[name="sort_dir"]');
+        var pageInput = form.querySelector('input[name="page"]');
+        if (!sortBy || !sortDir) return;
+        if (sortBy.value === col) {
+          sortDir.value = sortDir.value === "desc" ? "asc" : "desc";
+        } else {
+          sortBy.value = col;
+          sortDir.value = "desc";
+        }
+        if (pageInput) pageInput.value = "1";
+        form.requestSubmit();
+      };
+
+      window.amlOpenMinitransPopup = function (detectionId, trigger) {
+        openDetectionTxPopup(detectionId, {}, trigger);
+      };
       window.amlCloseTxPopup = close;
 
       window.amlTxPage = function (n) {

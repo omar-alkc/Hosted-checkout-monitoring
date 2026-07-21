@@ -89,15 +89,20 @@ def scenario_labels_normalized(raw: object) -> dict[str, str]:
 
 
 def scenario_label_map(db: Session) -> dict[str, str]:
-    """Base labels merged with DB overrides (if present)."""
-    base = dict(SCENARIO_LABELS)
+    """Base labels merged with DB overrides (deprecated path — prefer scenarios_service)."""
+    from app.services.scenarios_service import scenario_label_map as dynamic_map
+
     try:
-        row = get_or_create_scenario_config(db)
-        overrides = scenario_labels_normalized(getattr(row, "scenario_labels", None))
-        base.update(overrides)
+        return dynamic_map(db)
     except Exception:
-        pass
-    return base
+        base = dict(SCENARIO_LABELS)
+        try:
+            row = get_or_create_scenario_config(db)
+            overrides = scenario_labels_normalized(getattr(row, "scenario_labels", None))
+            base.update(overrides)
+        except Exception:
+            pass
+        return base
 
 
 def set_scenario_label(db: Session, *, scenario_id: str, label: str | None) -> ScenarioConfig:

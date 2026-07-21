@@ -1,0 +1,126 @@
+{% from "partials/detection_tx_table_macros.html" import sort_th, pagination_bar %}
+<div class="det-hosted-tx">
+  <p class="muted" style="margin-top:0">
+    Search hosted checkout transactions across all imports for this customer.
+    {% if anchor_iso %}Detection anchor: <strong>{{ anchor_iso | shortdt }}</strong>{% endif %}
+  </p>
+
+  <form
+    id="det-hosted-tx-form"
+    class="filters-grid"
+    hx-get="/detections/{{ detection_id }}/hosted-transactions"
+    hx-target="#det-tx-tab-panel"
+    hx-swap="innerHTML"
+  >
+    <input type="hidden" name="page" value="{{ page }}" />
+    <input type="hidden" name="sort_by" value="{{ sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ sort_dir }}" />
+    <input type="hidden" name="exclude_indices" value="{{ exclude_indices_input }}" />
+    <label>Import batch
+      <select name="batch_id">
+        <option value="" {% if not batch_id_input %}selected{% endif %}>(all imports)</option>
+        {% for b in batch_options %}
+          <option value="{{ b.id }}" {% if batch_id_input == b.id|string %}selected{% endif %}>#{{ b.id }} · {{ b.original_filename | truncate(40, True, '…') }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>MSISDN
+      <input type="text" name="msisdn" value="{{ msisdn_input }}" />
+    </label>
+    <label>CardId
+      <input type="text" name="card_id" value="{{ card_id_input }}" />
+    </label>
+    <label>Card holder name
+      <input type="text" name="account_holder" value="{{ account_holder_input }}" placeholder="Name" />
+    </label>
+    <label>Bank / company name
+      <input type="text" name="bank" value="{{ bank_input }}" />
+    </label>
+    <label>Amount min
+      <input type="number" name="amount_min" value="{{ amount_min_input }}" step="1" />
+    </label>
+    <label>Amount max
+      <input type="number" name="amount_max" value="{{ amount_max_input }}" step="1" />
+    </label>
+    <label>Date from
+      <input type="date" name="date_from" value="{{ date_from_input }}" />
+    </label>
+    <label>Time from
+      <input type="time" name="time_from" value="{{ time_from_input }}" step="60" />
+    </label>
+    <label>Date to
+      <input type="date" name="date_to" value="{{ date_to_input }}" />
+    </label>
+    <label>Time to
+      <input type="time" name="time_to" value="{{ time_to_input }}" step="60" />
+    </label>
+    <label>Approved
+      <select name="approved">
+        <option value="" {% if not approved_input %}selected{% endif %}>(any)</option>
+        <option value="true" {% if approved_input == 'true' %}selected{% endif %}>Yes</option>
+        <option value="false" {% if approved_input == 'false' %}selected{% endif %}>No</option>
+      </select>
+    </label>
+    <label>Rows
+      <select name="per_page">
+        {% for n in per_page_options %}
+          <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="filter-actions">
+      <button type="submit">Apply</button>
+    </div>
+  </form>
+
+  <div class="muted tx-popup-result-summary">
+    Showing <strong>{{ display_rows|length }}</strong> of <strong>{{ total }}</strong>
+  </div>
+  {{ pagination_bar(page, pages, 'det-hosted-tx-form', 'window.amlDetHostedPage') }}
+
+  <div class="scroll-x" style="margin-top:0.5rem">
+    <table class="data js-sortable">
+      <thead>
+        <tr>
+          {{ sort_th('Batch', 'batch', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('#', 'row_index', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('MSISDN', 'msisdn', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('CardId', 'card_id', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('Card holder', 'account_holder', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('Bank', 'bank', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('Amount', 'amount', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('Date & time', 'timestamp', sort_by, sort_dir, 'det-hosted-tx-form') }}
+          {{ sort_th('Approved', 'approved', sort_by, sort_dir, 'det-hosted-tx-form') }}
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in display_rows %}
+          {% set t = item.row %}
+          {% set p = t.payload %}
+          {% set bank = p.get("OPP_card.issuer.bank") %}
+          {% set holder = p.get("AccountHolder") | display_cell %}
+          {% set wallet_disp = p.get("WalletId") | display_cell %}
+          {% set card_disp = p.get("CardId") | display_cell %}
+          {% set bank_disp = bank | display_cell %}
+          {% set ts_raw = p.get("TxnTimestamp") or p.get("RequestTimestamp") or p.get("TxnDate") %}
+          {% set approved_disp = p.get("Approved") | yes_no %}
+          <tr{% if item.after_detection %} class="tx-row-after-detection"{% endif %}>
+            <td>#{{ t.import_batch_id }}</td>
+            <td>{{ t.row_index }}</td>
+            <td>{% if wallet_disp %}{{ wallet_disp }}{% else %}—{% endif %}</td>
+            <td>{% if card_disp %}{{ card_disp }}{% else %}—{% endif %}</td>
+            <td>{% if holder %}{{ holder }}{% else %}—{% endif %}</td>
+            <td>{% if bank_disp %}{{ bank_disp }}{% else %}—{% endif %}</td>
+            <td>{{ p.get("Amount")|amount0 }}</td>
+            <td>{{ (p.get("TxnTimestamp") or p.get("TxnDate") or p.get("RequestTimestamp"))|shortdt }}</td>
+            <td>{% if approved_disp %}{{ approved_disp }}{% else %}—{% endif %}</td>
+          </tr>
+        {% endfor %}
+        {% if not display_rows %}
+          <tr><td colspan="9" class="muted">No matches.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted tx-popup-legend"><span class="tx-after-detection-swatch"></span> Yellow rows = transactions after the detection anchor</p>
+</div>

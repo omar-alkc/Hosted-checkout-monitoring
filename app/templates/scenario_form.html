@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+  <p class="muted"><a href="/scenarios">← Scenario Manager</a></p>
+  <h1>{% if is_new %}Add scenario{% else %}{{ scenario_id }} · {{ scenario_name }}{% endif %}</h1>
+  {% if scenario_saved %}
+    <div class="flash success">Saved.</div>
+  {% endif %}
+  {% if flash_error %}
+    <div class="error">{{ flash_error }}</div>
+  {% endif %}
+  <p class="muted">
+    Optional <strong>Monitored issuer</strong> limits this scenario to transactions whose card issuer bank
+    contains the given text (case-insensitive). Multiple values: <code>BankA|BankB</code>.
+  </p>
+  {% if not is_new %}
+  <div class="panel">
+    <h2 style="margin-top: 0">Test scenario</h2>
+    <form method="post" action="/scenarios/{{ scenario_id }}/test" onsubmit="amlFormBusy(this)">
+      <label>Import batch
+        <select name="batch_id" required>
+          <option value="">(pick batch)</option>
+          {% for b in ready_batches %}
+            <option value="{{ b.id }}">{{ b.id }} · {{ b.original_filename }} · {{ b.created_at | shortdt }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p><button type="submit" class="secondary">Test</button></p>
+    </form>
+  </div>
+  {% endif %}
+  <div class="panel">
+    <form method="post" action="{% if is_new %}/scenarios{% else %}/scenarios/{{ scenario_id }}{% endif %}" onsubmit="amlFormBusy(this)">
+      <label>Scenario name
+        <input type="text" name="scenario_name" value="{{ scenario_name or '' }}" required autocomplete="off" />
+      </label>
+      {% if is_new %}
+      <label>Scenario group
+        <select name="group_type" required>
+          {% for gt, gl in group_type_labels.items() %}
+            <option value="{{ gt }}" {% if group_type == gt %}selected{% endif %}>{{ gl }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% else %}
+      <p class="muted">Group: <strong>{{ group_type_labels.get(group_type, group_type) }}</strong></p>
+      {% endif %}
+      <label>Monitoring period unit
+        <select name="period_unit">
+          {% for pu, pl in period_unit_labels.items() %}
+            <option value="{{ pu }}" {% if period_unit == pu %}selected{% endif %}>{{ pl }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Monitoring period value
+        <input type="number" name="period_value" value="{{ period_value or 1 }}" min="1" step="1" required />
+      </label>
+      <p class="muted" style="grid-column: 1 / -1">Example: weekly + 2 = a 2-week rolling window.</p>
+      <label>Scenario status
+        <select name="scenario_status">
+          <option value="enabled" {% if scenario_enabled %}selected{% endif %}>Enabled</option>
+          <option value="disabled" {% if not scenario_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </label>
+      <label>Monitored issuer (substring)
+        <input type="text" name="monitored_bank" value="{{ monitored_bank_input }}" placeholder="e.g. BankName" autocomplete="off" />
+      </label>
+      <label>Transaction filter
+        <select name="transaction_filter">
+          {% for tf_key, tf_label in transaction_filter_labels.items() %}
+            <option value="{{ tf_key }}" {% if transaction_filter == tf_key %}selected{% endif %}>{{ tf_label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <p class="muted" style="grid-column: 1 / -1">
+        Approved only drives volume detection; failed only applies to failure scenarios; both includes failed rows in linked context.
+      </p>
+      {% for key, label in fields %}
+        <label>{{ label }}
+          <input type="number" name="{{ key }}" value="{{ values.get(key, '') }}" step="1" min="0" />
+        </label>
+      {% endfor %}
+      {% if risk_fields %}
+        <div style="grid-column: 1 / -1; margin-top: 0.5rem">
+          <div class="panel" style="margin: 0; padding: 0.9rem 1rem">
+            <h3 style="margin-top: 0">High risk flag</h3>
+            <div class="filters-grid">
+              {% for key, label in risk_fields %}
+                <label>{{ label }}
+                  <input type="number" name="{{ key }}" value="{{ values.get(key, '') }}" step="1" min="0" />
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      <p>
+        <button type="submit">{% if is_new %}Create{% else %}Save{% endif %}</button>
+        {% if not is_new %}
+          <button type="submit" formaction="/scenarios/{{ scenario_id }}/delete" formmethod="post" class="secondary" onclick="return confirm('Delete this scenario? Historical detections are kept.');">Delete</button>
+        {% endif %}
+      </p>
+    </form>
+  </div>
+{% endblock %}

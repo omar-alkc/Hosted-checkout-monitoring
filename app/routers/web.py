@@ -47,18 +47,38 @@ from app.services.policy_service import get_pending_evidence_max_days
 from app.services.note_permissions import can_modify_note
 from app.services.external_enrichment_retry import retry_wallet_and_risk_enrichment
 from app.services.scenario_run import metrics_row, run_scenarios_for_batch, run_scenarios_for_rolling, run_single_scenario_for_batch
-from app.services.thresholds_service import (
-    SCENARIO_CODES,
-    get_or_create_scenario_config,
-    get_threshold_fields_for_scenario,
-    monitored_bank_for_scenario,
+from app.services.scenarios_service import (
+    GROUP_TYPE_LABELS,
+    PERIOD_UNIT_LABELS,
+    TRANSACTION_FILTER_LABELS,
+    create_scenario,
+    default_transaction_filter_for_group,
+    get_scenario_by_code,
+    list_active_scenarios,
+    period_display,
+    risk_threshold_fields_for_group,
     scenario_label_map,
-    scenario_enabled_normalized,
-    set_scenario_enabled,
-    set_scenario_label,
-    update_scenario_config,
-    update_scenario_partial,
+    soft_delete_scenario,
+    threshold_fields_for_group,
+    update_scenario,
 )
+from app.services.detection_transactions import default_card_id, wallet_msisdns_from_detection
+from app.services.detection_tx_table import (
+    hosted_row_after_detection,
+    normalize_hosted_sort,
+    normalize_sort_dir,
+    normalize_wallet_sort,
+    paginate_rows,
+    sort_wallet_tx_rows,
+)
+from app.services.minitrans_window import (
+    BEFORE_PRESETS,
+    _coerce_utc_ts,
+    compute_minitrans_window,
+    resolve_detection_anchor,
+)
+from app.services.transactions_export import build_transactions_export_workbook
+from app.services.thresholds_service import update_scenario_config
 
 router = APIRouter()
 
@@ -128,6 +148,7 @@ def detections_list(
     date_to: str | None = Query(None),
     detection_id: str | None = Query(None),
     msisdn: str | None = Query(None),
+    card_id: str | None = Query(None),
     page: int | None = Query(1),
     per_page: int | None = Query(20),
     notice: str | None = Query(None),
@@ -153,6 +174,7 @@ def detections_list(
     df_in = (date_from or "").strip()
     dt_in = (date_to or "").strip()
     ms_in = (msisdn or "").strip()
+    cid_in = (card_id or "").strip()
     det_raw = (detection_id or "").strip()
     det_id_int = int(det_raw) if det_raw.isdigit() else None
     allowed_pp = (20, 50, 100, 200)
@@ -185,6 +207,8 @@ def detections_list(
         export_q["detection_id"] = det_raw
     if ms_in:
         export_q["msisdn"] = ms_in
+    if cid_in:
+        export_q["card_id"] = cid_in
     export_q["per_page"] = str(pp)
     export_query = urlencode(export_q)
     labels = scenario_label_map(db)
@@ -204,6 +228,7 @@ def detections_list(
         assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
+        card_id=cid_in or None,
         risk=risk_q,
     )
     pages = max(1, (total + pp - 1) // pp)
@@ -222,6 +247,7 @@ def detections_list(
         assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
+        card_id=cid_in or None,
         risk=risk_q,
         limit=pp,
         offset=offset,
@@ -264,6 +290,7 @@ def detections_list(
             date_to_input=dt_in,
             detection_id_input=det_raw,
             msisdn_input=ms_in,
+            card_id_input=cid_in,
             flash_notice=(notice or "").strip() or None,
             export_query=export_query,
             status_keys=STATUS_KEYS,
@@ -301,6 +328,7 @@ def detections_export_xlsx(
     date_to: str | None = Query(None),
     detection_id: str | None = Query(None),
     msisdn: str | None = Query(None),
+    card_id: str | None = Query(None),
 ):
     status = (status or "").strip() or None
     queue_in = (queue or "").strip().lower() or None
@@ -318,6 +346,7 @@ def detections_export_xlsx(
     df_in = (date_from or "").strip()
     dt_in = (date_to or "").strip()
     ms_in = (msisdn or "").strip()
+    cid_in = (card_id or "").strip()
     det_raw = (detection_id or "").strip()
     det_id_int = int(det_raw) if det_raw.isdigit() else None
     raw, fname = build_detections_export_workbook(
@@ -332,6 +361,7 @@ def detections_export_xlsx(
         assigned=assigned_in,
         detection_id=det_id_int,
         msisdn=ms_in or None,
+        card_id=cid_in or None,
         risk=risk_q,
     )
     return StreamingResponse(
@@ -433,6 +463,303 @@ def detection_detail(
     )
 
 
+@router.get("/detections/{detection_id}/transactions-popup", response_class=HTMLResponse)
+def detection_transactions_popup_shell(
+    request: Request,
+    detection_id: int,
+    user: User = Depends(require_supervisor_or_investigator),
+    db: Session = Depends(get_db),
+    tab: str | None = Query("hosted"),
+):
+    det = db.get(Detection, detection_id)
+    if det is None:
+        raise HTTPException(status_code=404)
+    metrics = dict(det.metrics or {})
+    tab_in = (tab or "hosted").strip().lower()
+    if tab_in not in ("hosted", "wallet"):
+        tab_in = "hosted"
+    return templates.TemplateResponse(
+        request,
+        "partials/detection_transactions_popup.html",
+        _ctx(
+            request,
+            current_user=user,
+            detection_id=detection_id,
+            active_tab=tab_in,
+            default_msisdn=str(metrics.get("WalletId") or "").strip(),
+            default_card_id=default_card_id(det),
+            default_batch_id=det.import_batch_id,
+            before_presets=BEFORE_PRESETS,
+        ),
+    )
+
+
+def _detection_anchor_and_payloads(db: Session, det: Detection) -> tuple[object | None, list[dict]]:
+    tx_rows = transactions_for_detection(db, det)
+    payloads = [dict(r.payload or {}) for r in tx_rows]
+    anchor = resolve_detection_anchor(dict(det.metrics or {}), payloads, det.created_at)
+    return anchor, payloads
+
+
+@router.get("/detections/{detection_id}/hosted-transactions", response_class=HTMLResponse)
+def detection_hosted_transactions(
+    request: Request,
+    detection_id: int,
+    user: User = Depends(require_supervisor_or_investigator),
+    db: Session = Depends(get_db),
+    batch_id: str | None = Query(None),
+    msisdn: str | None = Query(None),
+    card_id: str | None = Query(None),
+    account_holder: str | None = Query(None),
+    bank: str | None = Query(None),
+    amount_min: str | None = Query(None),
+    amount_max: str | None = Query(None),
+    date_from: str | None = Query(None),
+    time_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    time_to: str | None = Query(None),
+    approved: str | None = Query(None),
+    exclude_indices: str | None = Query(None),
+    page: int | None = Query(1),
+    per_page: int | None = Query(20),
+    sort_by: str | None = Query("timestamp"),
+    sort_dir: str | None = Query("desc"),
+):
+    det = db.get(Detection, detection_id)
+    if det is None:
+        raise HTTPException(status_code=404)
+
+    anchor, _ = _detection_anchor_and_payloads(db, det)
+    anchor_iso = anchor.isoformat() if anchor is not None and hasattr(anchor, "isoformat") else None
+    sort_key = normalize_hosted_sort(sort_by)
+    sort_direction = normalize_sort_dir(sort_dir)
+
+    batch_raw = (batch_id or "").strip()
+    batch_id_int = int(batch_raw) if batch_raw.isdigit() else None
+    metrics = dict(det.metrics or {})
+    ms_in = (msisdn or "").strip() or str(metrics.get("WalletId") or "").strip() or None
+    cid_in = (card_id or "").strip() or default_card_id(det) or None
+
+    pp = int(per_page or 20)
+    if pp not in (20, 50, 100, 200):
+        pp = 20
+    p = int(page or 1)
+    if p < 1:
+        p = 1
+    offset = (p - 1) * pp
+    df = (date_from or "").strip()
+    tf = (time_from or "").strip()
+    dt = (date_to or "").strip()
+    tt = (time_to or "").strip()
+    dt_from_iso = None
+    dt_to_iso = None
+    if df:
+        dt_from_iso = df + "T" + (tf if tf else "00:00:00")
+    if dt:
+        dt_to_iso = dt + "T" + (tt if tt else "23:59:59")
+
+    rows, total = search_transactions_for_batch(
+        db,
+        batch_id=batch_id_int,
+        msisdn=ms_in,
+        card_id=cid_in,
+        account_holder=(account_holder or "").strip() or None,
+        bank=(bank or "").strip() or None,
+        amount_min=(amount_min or "").strip() or None,
+        amount_max=(amount_max or "").strip() or None,
+        dt_from=dt_from_iso,
+        dt_to=dt_to_iso,
+        approved=(approved or "").strip() or None,
+        exclude_row_indices=[
+            int(x)
+            for x in (exclude_indices or "").split(",")
+            if x.strip().isdigit() and int(x.strip()) > 0
+        ]
+        or None,
+        limit=pp,
+        offset=offset,
+        sort_by=sort_key,
+        sort_dir=sort_direction,
+    )
+    pages = max(1, (total + pp - 1) // pp)
+    if p > pages:
+        p = pages
+
+    display_rows = [
+        {
+            "row": row,
+            "after_detection": hosted_row_after_detection(dict(row.payload or {}), anchor),
+        }
+        for row in rows
+    ]
+
+    batch_options = _ready_batches(db)
+
+    return templates.TemplateResponse(
+        request,
+        "partials/detection_hosted_transactions.html",
+        _ctx(
+            request,
+            current_user=user,
+            detection_id=detection_id,
+            display_rows=display_rows,
+            rows=rows,
+            total=total,
+            page=p,
+            pages=pages,
+            per_page=pp,
+            per_page_options=(20, 50, 100, 200),
+            sort_by=sort_key,
+            sort_dir=sort_direction,
+            msisdn_input=ms_in or "",
+            card_id_input=cid_in or "",
+            account_holder_input=(account_holder or "").strip(),
+            bank_input=(bank or "").strip(),
+            amount_min_input=(amount_min or "").strip(),
+            amount_max_input=(amount_max or "").strip(),
+            date_from_input=df,
+            time_from_input=tf,
+            date_to_input=dt,
+            time_to_input=tt,
+            approved_input=(approved or "").strip(),
+            exclude_indices_input=(exclude_indices or "").strip(),
+            batch_id_input=batch_raw,
+            batch_options=batch_options,
+            anchor_iso=anchor_iso or "",
+        ),
+    )
+
+
+@router.get("/detections/{detection_id}/minitrans-transactions", response_class=HTMLResponse)
+def detection_minitrans_transactions(
+    request: Request,
+    detection_id: int,
+    user: User = Depends(require_supervisor_or_investigator),
+    db: Session = Depends(get_db),
+    before_preset: str | None = Query("last_week"),
+    custom_date_from: str | None = Query(None),
+    custom_time_from: str | None = Query(None),
+    custom_date_to: str | None = Query(None),
+    custom_time_to: str | None = Query(None),
+    include_after: str | None = Query(None),
+    page: int | None = Query(1),
+    per_page: int | None = Query(20),
+    sort_by: str | None = Query("timestamp"),
+    sort_dir: str | None = Query("desc"),
+):
+    det = db.get(Detection, detection_id)
+    if det is None:
+        raise HTTPException(status_code=404)
+
+    wallets = wallet_msisdns_from_detection(det)
+    anchor, _ = _detection_anchor_and_payloads(db, det)
+    sort_key = normalize_wallet_sort(sort_by)
+    sort_direction = normalize_sort_dir(sort_dir)
+    pp = int(per_page or 20)
+    if pp not in (20, 50, 100, 200):
+        pp = 20
+    p = int(page or 1)
+    if p < 1:
+        p = 1
+
+    preset = (before_preset or "last_week").strip().lower()
+    if preset not in BEFORE_PRESETS:
+        preset = "last_week"
+
+    custom_from = None
+    custom_to = None
+    cdf = (custom_date_from or "").strip()
+    ctf = (custom_time_from or "").strip()
+    cdt = (custom_date_to or "").strip()
+    ctt = (custom_time_to or "").strip()
+    if cdf:
+        custom_from = cdf + "T" + (ctf if ctf else "00:00:00")
+    if cdt:
+        custom_to = cdt + "T" + (ctt if ctt else "23:59:59")
+
+    inc_after = str(include_after or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    error_msg: str | None = None
+    rows: list[dict[str, object]] = []
+    all_rows: list[dict[str, object]] = []
+    total = 0
+    pages = 1
+    dt_from_display = ""
+    dt_to_display = ""
+
+    if not wallets:
+        error_msg = "No wallet MSISDN on this detection."
+    elif anchor is None or (hasattr(anchor, "__class__") and str(anchor) == "NaT"):
+        error_msg = "Could not determine detection anchor time."
+    else:
+        dt_from, dt_to = compute_minitrans_window(
+            anchor,
+            before_preset=preset,
+            custom_from=custom_from,
+            custom_to=custom_to,
+            include_after=inc_after,
+        )
+        dt_from_display = dt_from.isoformat() if dt_from else ""
+        dt_to_display = dt_to.isoformat() if dt_to else ""
+        try:
+            from io_utils import fetch_wallet_transactions_range
+
+            df = fetch_wallet_transactions_range(wallets, dt_from, dt_to)
+            anchor_ts = _coerce_utc_ts(anchor)
+            for _, r in df.iterrows():
+                ts = r.get("timestamp")
+                ts_norm = _coerce_utc_ts(ts)
+                after_det = bool(
+                    ts_norm is not None and anchor_ts is not None and ts_norm > anchor_ts
+                )
+                all_rows.append(
+                    {
+                        "timestamp": ts,
+                        "transactionId": r.get("transactionId"),
+                        "transactionAmount": r.get("transactionAmount"),
+                        "creditedMSISDN": r.get("creditedMSISDN"),
+                        "debitedMSISDN": r.get("debitedMSISDN"),
+                        "transactionType": r.get("transactionType"),
+                        "transactionDescription": r.get("transactionDescription"),
+                        "after_detection": after_det,
+                    }
+                )
+            all_rows = sort_wallet_tx_rows(all_rows, sort_by=sort_key, sort_dir=sort_direction)
+            rows, total, p, pages = paginate_rows(all_rows, page=p, per_page=pp)
+        except Exception as e:
+            error_msg = str(e)
+
+    return templates.TemplateResponse(
+        request,
+        "partials/minitrans_transactions_popup.html",
+        _ctx(
+            request,
+            current_user=user,
+            detection_id=detection_id,
+            rows=rows,
+            total=total,
+            page=p,
+            pages=pages,
+            per_page=pp,
+            per_page_options=(20, 50, 100, 200),
+            sort_by=sort_key,
+            sort_dir=sort_direction,
+            error_msg=error_msg,
+            before_preset=preset,
+            custom_date_from=cdf,
+            custom_time_from=ctf,
+            custom_date_to=cdt,
+            custom_time_to=ctt,
+            include_after=inc_after,
+            wallets=wallets,
+            anchor_display=str(anchor or ""),
+            dt_from_display=dt_from_display,
+            dt_to_display=dt_to_display,
+            before_presets=BEFORE_PRESETS,
+        ),
+    )
+
+
 @router.get("/imports/{batch_id}/transactions", response_class=HTMLResponse)
 def transactions_popup(
     request: Request,
@@ -527,7 +854,7 @@ def transactions_popup(
 @router.get("/transactions", response_class=HTMLResponse)
 def transactions_explorer(
     request: Request,
-    user: User = Depends(require_supervisor),
+    user: User = Depends(require_supervisor_or_investigator),
     db: Session = Depends(get_db),
     batch_id: str | None = Query(None),
     unique_id: str | None = Query(None),
@@ -618,6 +945,12 @@ def transactions_explorer(
         _ctx(
             request,
             current_user=user,
+            rows=rows,
+            total=total,
+            page=p,
+            pages=pages,
+            per_page=pp,
+            per_page_options=allowed_pp,
             batch_id_input=batch_raw,
             batch_id_int=batch_id_int,
             unique_id_input=(unique_id or "").strip(),
@@ -631,15 +964,71 @@ def transactions_explorer(
             time_from_input=tf,
             date_to_input=dt,
             time_to_input=tt,
-            approved_input=(approved or "").strip().lower(),
-            per_page=pp,
-            per_page_options=allowed_pp,
-            rows=rows,
-            total=total,
-            page=p,
-            pages=pages,
+            approved_input=(approved or "").strip(),
             page_url=_page_url,
+            export_query=urlencode({k: v for k, v in {
+                "batch_id": batch_raw,
+                "unique_id": (unique_id or "").strip(),
+                "msisdn": (msisdn or "").strip(),
+                "card_id": (card_id or "").strip(),
+                "account_holder": (account_holder or "").strip(),
+                "bank": (bank or "").strip(),
+                "amount_min": (amount_min or "").strip(),
+                "amount_max": (amount_max or "").strip(),
+                "date_from": df,
+                "time_from": tf,
+                "date_to": dt,
+                "time_to": tt,
+                "approved": (approved or "").strip(),
+            }.items() if str(v).strip() != ""}),
         ),
+    )
+
+
+@router.get("/transactions/export")
+def transactions_export(
+    user: User = Depends(require_supervisor_or_investigator),
+    db: Session = Depends(get_db),
+    batch_id: str | None = Query(None),
+    unique_id: str | None = Query(None),
+    msisdn: str | None = Query(None),
+    card_id: str | None = Query(None),
+    account_holder: str | None = Query(None),
+    bank: str | None = Query(None),
+    amount_min: str | None = Query(None),
+    amount_max: str | None = Query(None),
+    date_from: str | None = Query(None),
+    time_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    time_to: str | None = Query(None),
+    approved: str | None = Query(None),
+):
+    batch_raw = (batch_id or "").strip()
+    batch_id_int = int(batch_raw) if batch_raw.isdigit() else None
+    df = (date_from or "").strip()
+    tf = (time_from or "").strip()
+    dt = (date_to or "").strip()
+    tt = (time_to or "").strip()
+    dt_from_iso = df + "T" + (tf if tf else "00:00:00") if df else None
+    dt_to_iso = dt + "T" + (tt if tt else "23:59:59") if dt else None
+    data, fname = build_transactions_export_workbook(
+        db,
+        batch_id=batch_id_int,
+        unique_id=(unique_id or "").strip() or None,
+        msisdn=(msisdn or "").strip() or None,
+        card_id=(card_id or "").strip() or None,
+        account_holder=(account_holder or "").strip() or None,
+        bank=(bank or "").strip() or None,
+        amount_min=(amount_min or "").strip() or None,
+        amount_max=(amount_max or "").strip() or None,
+        dt_from=dt_from_iso,
+        dt_to=dt_to_iso,
+        approved=(approved or "").strip() or None,
+    )
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
@@ -1016,36 +1405,23 @@ def scenarios_manager(
     updated: str | None = Query(None),
     failed: str | None = Query(None),
     skipped: str | None = Query(None),
+    error: str | None = Query(None),
 ):
-    row = get_or_create_scenario_config(db)
-    enabled_map = scenario_enabled_normalized(getattr(row, "scenario_enabled", None))
-    labels = scenario_label_map(db)
     scenario_rows: list[dict[str, object]] = []
-    for sid in SCENARIO_CODES:
-        enabled = bool(enabled_map.get(sid, True))
+    for s in list_active_scenarios(db):
         scenario_rows.append(
             {
-                "id": sid,
-                "label": labels.get(sid, sid),
-                "monitored": monitored_bank_for_scenario(row, sid) or "",
-                "status": "Enabled" if enabled else "Disabled",
+                "id": s.code,
+                "label": s.name,
+                "group": GROUP_TYPE_LABELS.get(s.group_type, s.group_type),
+                "period": period_display(s.period_unit, s.period_value),
+                "monitored": s.monitored_bank or "",
+                "status": "Enabled" if s.enabled else "Disabled",
             }
         )
-    upd = 0
-    fail_n = 0
-    try:
-        upd = int((updated or "").strip() or "0")
-    except ValueError:
-        upd = 0
-    try:
-        fail_n = int((failed or "").strip() or "0")
-    except ValueError:
-        fail_n = 0
-    skip_n = 0
-    try:
-        skip_n = int((skipped or "").strip() or "0")
-    except ValueError:
-        skip_n = 0
+    upd = int((updated or "").strip() or "0") if (updated or "").strip().isdigit() else 0
+    fail_n = int((failed or "").strip() or "0") if (failed or "").strip().isdigit() else 0
+    skip_n = int((skipped or "").strip() or "0") if (skipped or "").strip().isdigit() else 0
     return templates.TemplateResponse(
         request,
         "scenario_manager.html",
@@ -1055,6 +1431,7 @@ def scenarios_manager(
             scenario_rows=scenario_rows,
             list_saved=(saved or "").strip() == "1",
             flash_notice=(notice or "").strip() or None,
+            flash_error=(error or "").strip() or None,
             enrichment_updated=upd,
             enrichment_failed=fail_n,
             enrichment_skipped=skip_n,
@@ -1062,20 +1439,94 @@ def scenarios_manager(
     )
 
 
-def _shared_threshold_note(scenario_id: str) -> str | None:
-    sid = scenario_id.strip().upper()
-    if sid in {"D1", "D2"}:
-        return "Daily amount thresholds (min per txn and min total per group) are shared between D1 and D2."
-    return None
+def _ready_batches(db: Session) -> list[ImportBatch]:
+    return (
+        db.query(ImportBatch)
+        .filter(ImportBatch.status == ImportBatchStatus.ready.value)
+        .order_by(ImportBatch.created_at.desc())
+        .limit(25)
+        .all()
+    )
 
 
-def _high_risk_field_keys(scenario_id: str) -> set[str]:
-    sid = scenario_id.strip().upper()
-    if sid == "D1":
-        return {"d1_risk_min_total_amount", "d1_risk_min_expenditure_pct"}
-    if sid == "D2":
-        return {"d2_risk_min_total_amount", "d2_risk_min_wallet_expenditure_pct", "d2_risk_min_wallets_pct"}
-    return set()
+def _scenario_form_values(scenario) -> dict[str, object]:
+    vals: dict[str, object] = dict(scenario.thresholds or {})
+    for k, v in vals.items():
+        if "amount" in k:
+            try:
+                vals[k] = int(float(v))
+            except (TypeError, ValueError):
+                pass
+    return vals
+
+
+@router.get("/scenarios/new", response_class=HTMLResponse)
+def scenario_new_page(
+    request: Request,
+    user: User = Depends(require_supervisor),
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(
+        request,
+        "scenario_form.html",
+        _ctx(
+            request,
+            current_user=user,
+            is_new=True,
+            scenario_id="",
+            scenario_name="",
+            group_type=next(iter(GROUP_TYPE_LABELS.keys())),
+            period_unit="day",
+            period_value=1,
+            scenario_enabled=True,
+            monitored_bank_input="",
+            transaction_filter=default_transaction_filter_for_group(next(iter(GROUP_TYPE_LABELS.keys()))),
+            transaction_filter_labels=TRANSACTION_FILTER_LABELS,
+            fields=threshold_fields_for_group(next(iter(GROUP_TYPE_LABELS.keys()))),
+            risk_fields=[],
+            values={},
+            group_type_labels=GROUP_TYPE_LABELS,
+            period_unit_labels=PERIOD_UNIT_LABELS,
+            ready_batches=_ready_batches(db),
+        ),
+    )
+
+
+@router.post("/scenarios", response_class=HTMLResponse)
+async def scenario_create(
+    request: Request,
+    user: User = Depends(require_supervisor),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    form_dict = {str(k): str(v) for k, v in form.items()}
+    enabled_raw = str(form.get("scenario_status") or "enabled").strip().lower()
+    enabled = enabled_raw not in {"disabled", "disable", "off", "false", "0"}
+    try:
+        create_scenario(
+            db,
+            name=str(form.get("scenario_name") or ""),
+            group_type=str(form.get("group_type") or ""),
+            period_unit=str(form.get("period_unit") or "day"),
+            period_value=int(str(form.get("period_value") or "1")),
+            thresholds=_parse_form_thresholds(str(form.get("group_type") or ""), form_dict),
+            monitored_bank=str(form.get("monitored_bank") or ""),
+            enabled=enabled,
+            transaction_filter=str(form.get("transaction_filter") or ""),
+        )
+    except Exception as e:
+        return RedirectResponse(url=f"/scenarios/new?error={quote(str(e))}", status_code=303)
+    return RedirectResponse(url="/scenarios?saved=1", status_code=303)
+
+
+def _parse_form_thresholds(group_type: str, form: dict[str, str]) -> dict[str, float | int]:
+    from app.services.scenarios_service import _normalize_thresholds
+
+    raw = {k: form[k] for k in form if k not in {
+        "scenario_name", "group_type", "period_unit", "period_value",
+        "monitored_bank", "scenario_status", "batch_id", "transaction_filter",
+    }}
+    return _normalize_thresholds(group_type, raw)
 
 
 @router.get("/scenarios/{scenario_id}", response_class=HTMLResponse)
@@ -1085,57 +1536,36 @@ def scenario_detail_page(
     user: User = Depends(require_supervisor),
     db: Session = Depends(get_db),
     saved: str | None = Query(None),
+    error: str | None = Query(None),
 ):
     sid = scenario_id.strip().upper()
-    if sid not in SCENARIO_CODES:
+    scenario = get_scenario_by_code(db, sid)
+    if scenario is None:
         raise HTTPException(status_code=404)
-    row = get_or_create_scenario_config(db)
-    enabled_map = scenario_enabled_normalized(getattr(row, "scenario_enabled", None))
-    scenario_enabled = bool(enabled_map.get(sid, True))
-    batches = (
-        db.query(ImportBatch)
-        .filter(ImportBatch.status == ImportBatchStatus.ready.value)
-        .order_by(ImportBatch.created_at.desc())
-        .limit(25)
-        .all()
-    )
-    fields = get_threshold_fields_for_scenario(sid)
-    risk_keys = _high_risk_field_keys(sid)
-    threshold_fields = [(k, lab) for k, lab in fields if k not in risk_keys]
-    risk_fields = [(k, lab) for k, lab in fields if k in risk_keys]
-    vals: dict[str, object] = {}
-    for k, _ in fields:
-        v = getattr(row, k)
-        # Amount thresholds are stored as Numeric and may render with trailing decimals.
-        if "amount" in k:
-            try:
-                vals[k] = int(v)
-            except Exception:
-                try:
-                    vals[k] = int(float(v))
-                except Exception:
-                    vals[k] = v
-        else:
-            vals[k] = v
-    monitored = monitored_bank_for_scenario(row, sid) or ""
-    labels = scenario_label_map(db)
     return templates.TemplateResponse(
         request,
-        "scenario_detail.html",
+        "scenario_form.html",
         _ctx(
             request,
             current_user=user,
-            scenario_id=sid,
-            scenario_label=labels.get(sid, sid),
-            scenario_label_input=labels.get(sid, sid),
-            ready_batches=batches,
-            fields=threshold_fields,
-            risk_fields=risk_fields,
-            values=vals,
-            monitored_bank_input=monitored,
-            scenario_enabled=scenario_enabled,
-            shared_note=_shared_threshold_note(sid),
+            is_new=False,
+            scenario_id=scenario.code,
+            scenario_name=scenario.name,
+            group_type=scenario.group_type,
+            period_unit=scenario.period_unit,
+            period_value=scenario.period_value,
+            scenario_enabled=scenario.enabled,
+            monitored_bank_input=scenario.monitored_bank or "",
+            transaction_filter=scenario.transaction_filter,
+            transaction_filter_labels=TRANSACTION_FILTER_LABELS,
+            fields=threshold_fields_for_group(scenario.group_type),
+            risk_fields=risk_threshold_fields_for_group(scenario.group_type),
+            values=_scenario_form_values(scenario),
+            group_type_labels=GROUP_TYPE_LABELS,
+            period_unit_labels=PERIOD_UNIT_LABELS,
+            ready_batches=_ready_batches(db),
             scenario_saved=(saved or "").strip() == "1",
+            flash_error=(error or "").strip() or None,
         ),
     )
 
@@ -1145,30 +1575,46 @@ async def scenario_detail_save(
     request: Request, scenario_id: str, user: User = Depends(require_supervisor), db: Session = Depends(get_db)
 ):
     sid = scenario_id.strip().upper()
-    if sid not in SCENARIO_CODES:
+    scenario = get_scenario_by_code(db, sid)
+    if scenario is None:
         raise HTTPException(status_code=404)
     form = await request.form()
+    form_dict = {str(k): str(v) for k, v in form.items()}
     enabled_raw = str(form.get("scenario_status") or "").strip().lower()
     enable_flag = None
     if enabled_raw in {"enabled", "enable", "on", "true", "1"}:
         enable_flag = True
     elif enabled_raw in {"disabled", "disable", "off", "false", "0"}:
         enable_flag = False
-    label_in = str(form.get("scenario_label") or "")
-    data = {
-        str(k): str(v)
-        for k, v in form.items()
-        if str(k) not in {"monitored_bank", "scenario_status", "scenario_label"}
-    }
-    monitored_bank = str(form.get("monitored_bank") or "")
     try:
-        if enable_flag is not None:
-            set_scenario_enabled(db, scenario_id=sid, enabled=enable_flag)
-        set_scenario_label(db, scenario_id=sid, label=label_in)
-        update_scenario_partial(db, scenario_id=sid, values=data, monitored_bank=monitored_bank)
+        update_scenario(
+            db,
+            scenario,
+            name=str(form.get("scenario_name") or scenario.name),
+            period_unit=str(form.get("period_unit") or scenario.period_unit),
+            period_value=int(str(form.get("period_value") or scenario.period_value)),
+            thresholds=_parse_form_thresholds(scenario.group_type, form_dict),
+            monitored_bank=str(form.get("monitored_bank") or ""),
+            enabled=enable_flag if enable_flag is not None else scenario.enabled,
+            transaction_filter=str(form.get("transaction_filter") or scenario.transaction_filter),
+        )
     except Exception as e:
         return RedirectResponse(url=f"/scenarios/{sid}?error={quote(str(e))}", status_code=303)
     return RedirectResponse(url=f"/scenarios/{sid}?saved=1", status_code=303)
+
+
+@router.post("/scenarios/{scenario_id}/delete", response_class=HTMLResponse)
+async def scenario_delete(
+    scenario_id: str,
+    user: User = Depends(require_supervisor),
+    db: Session = Depends(get_db),
+):
+    sid = scenario_id.strip().upper()
+    scenario = get_scenario_by_code(db, sid)
+    if scenario is None:
+        raise HTTPException(status_code=404)
+    soft_delete_scenario(db, scenario)
+    return RedirectResponse(url="/scenarios?saved=1", status_code=303)
 
 
 @router.post("/scenarios/{scenario_id}/test", response_class=HTMLResponse)
@@ -1176,7 +1622,8 @@ async def scenario_test_run(
     request: Request, scenario_id: str, user: User = Depends(require_supervisor), db: Session = Depends(get_db)
 ):
     sid = scenario_id.strip().upper()
-    if sid not in SCENARIO_CODES:
+    scenario = get_scenario_by_code(db, sid)
+    if scenario is None:
         raise HTTPException(status_code=404)
     form = await request.form()
     batch_raw = str(form.get("batch_id") or "").strip()

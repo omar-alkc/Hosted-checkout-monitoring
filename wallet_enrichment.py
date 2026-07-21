@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from app.constants import GOVERNORATE_CODE_MAP
+
 from typing import Any, Dict, Mapping
 
 import pandas as pd
@@ -105,17 +107,32 @@ def enrich_detection_metrics_dataframe(
         return det
 
     prof = wallet_profiles_df.copy()
-    if city_name_mapping:
-        prof["CityName"] = prof["city"].map(city_name_mapping).fillna(prof["city"])
-    else:
-        prof["CityName"] = prof["city"]
+
+    def _resolve_city(raw_city: str) -> str:
+        code = str(raw_city or "").strip()
+        if not code or code.lower() == "nan":
+            return ""
+        if code in GOVERNORATE_CODE_MAP:
+            return GOVERNORATE_CODE_MAP[code]
+        if city_name_mapping and code in city_name_mapping:
+            return str(city_name_mapping[code])
+        return code
+
+    prof["CityName"] = prof["city"].map(_resolve_city)
+    prof["GovernorateName"] = prof["city"].map(lambda c: GOVERNORATE_CODE_MAP.get(str(c or "").strip(), ""))
 
     name_map: Dict[str, str] = dict(zip(prof["msisdn"].astype(str), prof["Fullname"].astype(str)))
     city_map: Dict[str, str] = dict(zip(prof["msisdn"].astype(str), prof["CityName"].astype(str)))
+    gov_map: Dict[str, str] = dict(zip(prof["msisdn"].astype(str), prof["GovernorateName"].astype(str)))
 
     if "WalletId" in det.columns:
         det["WalletHolderFullName"] = det["WalletId"].astype(str).map(name_map).fillna("")
         det["WalletCityName"] = det["WalletId"].astype(str).map(city_map).fillna("")
+        det["WalletGovernorate"] = det["WalletId"].astype(str).map(gov_map).fillna("")
+        det["WalletGovernorate"] = det["WalletGovernorate"].where(
+            det["WalletGovernorate"].astype(str).str.strip() != "",
+            det["WalletCityName"],
+        )
     elif "WalletIdsPipe" in det.columns:
 
         def map_pipe(s: str, m: Dict[str, str]) -> str:
@@ -124,6 +141,7 @@ def enrich_detection_metrics_dataframe(
 
         det["WalletHolderNamesPipe"] = det["WalletIdsPipe"].apply(lambda s: map_pipe(str(s), name_map))
         det["WalletCityNamesPipe"] = det["WalletIdsPipe"].apply(lambda s: map_pipe(str(s), city_map))
+        det["WalletGovernoratesPipe"] = det["WalletIdsPipe"].apply(lambda s: map_pipe(str(s), gov_map))
         det["WalletHolderFullName"] = det["WalletHolderNamesPipe"].fillna("")
     else:
         det["WalletHolderFullName"] = ""
@@ -182,17 +200,51 @@ def apply_linked_row_totals_to_metrics(
     return out
 
 
-def apply_scenario_slice_for_linked_indices(m: pd.DataFrame, scenario_id: str) -> pd.DataFrame:
+def apply_scenario_slice_for_linked_indices(
+    m: pd.DataFrame,
+    scenario_id: str,
+    *,
+    group_type: str = "",
+    transaction_filter: str = "approved_only",
+) -> pd.DataFrame:
     """
     After key-matching `raw` to one detection row, restrict to rows that belong in *linked transactions*
     for that scenario (approved-only cash-in rules vs rejected-only failure rules).
-
-    Needed because merged `raw` can still include extra rows when keys collide, and payload `Approved`
-    types can differ from scenario-time filtering.
     """
     if m.empty:
         return m
+    tf = (transaction_filter or "approved_only").strip().lower()
+    gt = (group_type or "").strip()
     sid = (scenario_id or "").strip().upper()
+    if not gt:
+        if sid in {"D1", "W1"}:
+            gt = "many_cards_one_wallet"
+        elif sid in {"D2", "W2"}:
+            gt = "one_card_many_wallets"
+        elif sid in {"D3", "W3"}:
+            gt = "multiple_failed"
+
+    if tf == "both":
+        return m.copy()
+    if tf == "failed_only" or gt == "multiple_failed":
+        if "Rejected" in m.columns:
+            rj = m["Rejected"].fillna(False).astype(bool)
+            return m.loc[rj].copy()
+        if "Approved" in m.columns:
+            return m.loc[~_approved_row_mask(m["Approved"])].copy()
+        return m.iloc[0:0]
+
+    if gt in {"many_cards_one_wallet", "one_card_many_wallets", "one_card_one_wallet"}:
+        if "Approved" not in m.columns:
+            return m
+        ok = _approved_row_mask(m["Approved"])
+        return m.loc[ok].copy()
+    if gt == "multiple_failed":
+        if "Rejected" not in m.columns:
+            return m
+        rj = m["Rejected"].fillna(False).astype(bool)
+        return m.loc[rj].copy()
+    # Legacy fallback by scenario code
     if sid in {"D1", "D2", "W1", "W2"}:
         if "Approved" not in m.columns:
             return m

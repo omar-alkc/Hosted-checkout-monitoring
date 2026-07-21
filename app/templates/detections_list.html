@@ -55,7 +55,7 @@
         <input type="text" name="msisdn" value="{{ msisdn_input or '' }}" placeholder="Phone / wallet" />
       </label>
 
-      <details class="filters-advanced"{% if risk_filter or batch_filter or scope_filter or date_from_input or date_to_input or detection_id_input %} open{% endif %}>
+      <details class="filters-advanced"{% if risk_filter or batch_filter or scope_filter or date_from_input or date_to_input or detection_id_input or card_id_input %} open{% endif %}>
         <summary>Advanced filters</summary>
         <div class="filters-advanced-grid">
           <label>Risk
@@ -83,6 +83,9 @@
           </label>
           <label>Detection id
             <input type="number" name="detection_id" value="{{ detection_id_input or '' }}" min="1" step="1" />
+          </label>
+          <label>CardId
+            <input type="text" name="card_id" value="{{ card_id_input or '' }}" placeholder="BIN + last four" />
           </label>
         </div>
       </details>

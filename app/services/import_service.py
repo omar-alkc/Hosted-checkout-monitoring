@@ -381,6 +381,8 @@ def search_transactions_for_batch(
     exclude_row_indices: list[int] | None = None,
     limit: int = 50,
     offset: int = 0,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
 ) -> tuple[list[TransactionRow], int]:
     """
     Filter transaction_rows for one batch or across all batches using JSONB payload fields.
@@ -464,14 +466,32 @@ def search_transactions_for_batch(
     count_stmt = text(f"SELECT count(*) FROM transaction_rows WHERE {where_sql}")
     total = int(db.execute(count_stmt, params).scalar_one() or 0)
 
-    # Order by timestamp string desc, then row_index desc.
+    from app.services.detection_tx_table import normalize_hosted_sort, normalize_sort_dir
+
+    sort_key = normalize_hosted_sort(sort_by)
+    direction = normalize_sort_dir(sort_dir).upper()
+    sort_exprs: dict[str, str] = {
+        "batch": "transaction_rows.import_batch_id",
+        "row_index": "transaction_rows.row_index",
+        "msisdn": "lower(coalesce(transaction_rows.payload->>'WalletId',''))",
+        "card_id": "lower(coalesce(transaction_rows.payload->>'CardId',''))",
+        "account_holder": "lower(coalesce(transaction_rows.payload->>'AccountHolder',''))",
+        "bank": "lower(coalesce(transaction_rows.payload->>'OPP_card.issuer.bank',''))",
+        "amount": "NULLIF(transaction_rows.payload->>'Amount','')::numeric",
+        "timestamp": ts_expr,
+        "approved": "lower(coalesce(transaction_rows.payload->>'Approved',''))",
+    }
+    order_col = sort_exprs[sort_key]
+    nulls = "NULLS LAST"
+    order_sql = f"{order_col} {direction} {nulls}, transaction_rows.row_index {direction}"
+
     params2 = {**params, "lim": int(limit), "off": int(offset)}
     rows_stmt = text(
         f"""
         SELECT id
         FROM transaction_rows
         WHERE {where_sql}
-        ORDER BY {ts_expr} DESC, row_index DESC
+        ORDER BY {order_sql}
         LIMIT :lim OFFSET :off
         """
     )

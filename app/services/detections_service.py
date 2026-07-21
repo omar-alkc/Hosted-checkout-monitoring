@@ -45,6 +45,7 @@ def _detections_stmt(
     assigned: str | None = None,
     detection_id: int | None = None,
     msisdn: str | None = None,
+    card_id: str | None = None,
     risk: str | None = None,
 ) -> Select[tuple[Detection]]:
     stmt: Select[tuple[Detection]] = (
@@ -96,6 +97,14 @@ def _detections_stmt(
                     "(detections.metrics->>'WalletId') ILIKE :ms "
                     "OR (detections.metrics->>'WalletIdsPipe') ILIKE :ms"
                 ).bindparams(ms=pat)
+            )
+    if card_id:
+        raw = card_id.strip()
+        clean = _strip_like_metachars(raw)
+        if clean:
+            pat = f"%{clean}%"
+            stmt = stmt.where(
+                text("(detections.metrics->>'CardId') ILIKE :cid").bindparams(cid=pat)
             )
     rf = _normalize_risk_filter(risk)
     if rf == "high":
@@ -152,6 +161,7 @@ def count_detections(
     assigned: str | None = None,
     detection_id: int | None = None,
     msisdn: str | None = None,
+    card_id: str | None = None,
     risk: str | None = None,
 ) -> int:
     stmt = _detections_stmt(
@@ -166,6 +176,7 @@ def count_detections(
         assigned=assigned,
         detection_id=detection_id,
         msisdn=msisdn,
+        card_id=card_id,
         risk=risk,
     )
     # Use count(Detection.id) to keep FROM clause (count(*) can drop FROM under SQLAlchemy 2.0).
@@ -186,6 +197,7 @@ def list_detections(
     assigned: str | None = None,
     detection_id: int | None = None,
     msisdn: str | None = None,
+    card_id: str | None = None,
     risk: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
@@ -202,6 +214,7 @@ def list_detections(
         assigned=assigned,
         detection_id=detection_id,
         msisdn=msisdn,
+        card_id=card_id,
         risk=risk,
     )
     if offset is not None:
@@ -278,6 +291,7 @@ def list_detections_with_previous_count(
     assigned: str | None = None,
     detection_id: int | None = None,
     msisdn: str | None = None,
+    card_id: str | None = None,
     risk: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
@@ -303,6 +317,7 @@ def list_detections_with_previous_count(
         assigned=assigned,
         detection_id=detection_id,
         msisdn=msisdn,
+        card_id=card_id,
         risk=risk,
     ).with_only_columns(
         Detection,

@@ -1,0 +1,18 @@
+{% macro sort_th(label, col, sort_by, sort_dir, form_id) -%}
+<th class="th-sortable{% if sort_by == col %} th-sort-{{ sort_dir }}{% endif %}"
+    role="button" tabindex="0"
+    onclick="window.amlDetTxSort && window.amlDetTxSort('{{ form_id }}', '{{ col }}')"
+    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.click();}">{{ label }}</th>
+{%- endmacro %}
+
+{% macro pagination_bar(page, pages, form_id, page_fn) -%}
+<div class="muted tx-popup-pagination">
+  <div>Page <strong>{{ page }}</strong>/<strong>{{ pages }}</strong></div>
+  <div class="tx-popup-pagination-nav">
+    <button type="button" class="button secondary" onclick="{{ page_fn }}(1)" {% if page<=1 %}disabled{% endif %}>«</button>
+    <button type="button" class="button secondary" onclick="{{ page_fn }}({{ page - 1 }})" {% if page<=1 %}disabled{% endif %}>‹</button>
+    <button type="button" class="button secondary" onclick="{{ page_fn }}({{ page + 1 }})" {% if page>=pages %}disabled{% endif %}>›</button>
+    <button type="button" class="button secondary" onclick="{{ page_fn }}({{ pages }})" {% if page>=pages %}disabled{% endif %}>»</button>
+  </div>
+</div>
+{%- endmacro %}

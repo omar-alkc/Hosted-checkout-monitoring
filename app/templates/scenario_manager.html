@@ -1,37 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
   <p class="muted"><a href="/detections">← Detections</a></p>
-  <h1>Scenario Manager</h1>
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem">
+    <h1 style="margin:0">Scenario Manager</h1>
+    <a class="button" href="/scenarios/new">Add scenario</a>
+  </div>
   <div data-scenario-manager-alerts>
+  {% if list_saved %}
+    <div class="flash success">Saved.</div>
+  {% endif %}
+  {% if flash_error %}
+    <div class="error">{{ flash_error }}</div>
+  {% endif %}
   {% if flash_notice == "enrichment_retry" %}
     {% if enrichment_failed and enrichment_failed > 0 %}
-      <div class="error">
-        Enrichment did not finish for <strong>{{ enrichment_failed }}</strong> detection(s)
-        (external MariaDB/MySQL unreachable, timeout, or risk lookup error). Rows may still lack wallet holder or risk.
-      </div>
+      <div class="error">Enrichment did not finish for <strong>{{ enrichment_failed }}</strong> detection(s).</div>
     {% endif %}
     {% if enrichment_updated and enrichment_updated > 0 %}
-      <div class="flash success">
-        Successfully updated <strong>{{ enrichment_updated }}</strong> detection(s).
-        {% if enrichment_skipped %}<span class="muted">Skipped (no linked rows): {{ enrichment_skipped }}.</span>{% endif %}
-      </div>
-    {% elif enrichment_updated == 0 and enrichment_failed == 0 %}
-      <div class="flash success">
-        Nothing to update.
-        {% if enrichment_skipped %}<span class="muted">{{ enrichment_skipped }} detection(s) had no linked rows.</span>{% endif %}
-      </div>
+      <div class="flash success">Successfully updated <strong>{{ enrichment_updated }}</strong> detection(s).</div>
     {% endif %}
   {% endif %}
   </div>
-  <p class="muted">Configure thresholds and optional card-issuer filters per scenario. Values apply when you run scenarios from an import.</p>
+  <p class="muted">Configure monitoring scenarios by group, period, and thresholds. Values apply when you run scenarios from an import.</p>
   <div class="scroll-x panel">
     <table class="data js-sortable">
       <thead>
         <tr>
-          <th class="th-sortable" data-sort-col="0" data-sort-type="text" data-sort-default="asc">Code</th>
+          <th class="th-sortable" data-sort-col="0" data-sort-type="text">Code</th>
           <th class="th-sortable" data-sort-col="1" data-sort-type="text">Scenario</th>
-          <th class="th-sortable" data-sort-col="2" data-sort-type="text">Status</th>
-          <th class="th-sortable" data-sort-col="3" data-sort-type="text">Monitored issuer (substring)</th>
+          <th class="th-sortable" data-sort-col="2" data-sort-type="text">Group</th>
+          <th class="th-sortable" data-sort-col="3" data-sort-type="text">Period</th>
+          <th class="th-sortable" data-sort-col="4" data-sort-type="text">Status</th>
+          <th class="th-sortable" data-sort-col="5" data-sort-type="text">Monitored issuer</th>
           <th></th>
         </tr>
       </thead>
@@ -40,37 +40,29 @@
           <tr>
             <td data-sort-value="{{ r.id }}"><strong>{{ r.id }}</strong></td>
             <td data-sort-value="{{ r.label }}">{{ r.label }}</td>
+            <td data-sort-value="{{ r.group }}">{{ r.group }}</td>
+            <td data-sort-value="{{ r.period }}">{{ r.period }}</td>
             <td data-sort-value="{{ r.status }}"><span class="muted">{{ r.status }}</span></td>
-            <td class="muted" data-sort-value="{{ r.monitored or '' }}">{% if r.monitored %}{{ r.monitored }}{% else %}— (any issuer){% endif %}</td>
+            <td class="muted" data-sort-value="{{ r.monitored or '' }}">{% if r.monitored %}{{ r.monitored }}{% else %}—{% endif %}</td>
             <td><a class="button secondary" href="/scenarios/{{ r.id }}">Configure</a></td>
           </tr>
+        {% else %}
+          <tr><td colspan="7" class="muted">No scenarios — <a href="/scenarios/new">add one</a>.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <div class="panel">
     <h2 style="margin-top: 0">External database enrichment</h2>
-    <p class="muted">
-      Re-runs MariaDB wallet holder lookup and D1/D2 external risk for <strong>every</strong> detection that has linked transactions.
-      Detections without linked rows are skipped.
-    </p>
-    <form
-      method="post"
-      action="/scenarios/retry-external-enrichment"
-      onsubmit="amlScenarioRetryBegin(this); return true;"
-    >
+    <form method="post" action="/scenarios/retry-external-enrichment" onsubmit="amlScenarioRetryBegin(this); return true;">
       <button type="submit" class="button">Retry risk calculation &amp; fetch wallet holder name</button>
     </form>
   </div>
   <div class="panel">
-    <h2 style="margin-top: 0">Rolling weekly run</h2>
-    <p class="muted">
-      Runs weekly scenarios across <strong>all imports</strong> using a trailing <strong>N-day</strong> window (default 7).
-      Optionally set a date range: the N-day window ends on the end date (capped to now if that date is in the future),
-      and only transactions inside both the range and those N days are included.
-    </p>
+    <h2 style="margin-top: 0">Rolling run</h2>
+    <p class="muted">Runs all enabled scenarios across imports using each scenario's configured period window.</p>
     <form method="post" action="/scenarios/run-rolling" onsubmit="amlFormBusy(this)">
-      <label>Window days
+      <label>Fallback window days (when no scenarios)
         <input type="number" name="days" value="7" min="1" max="365" step="1" />
       </label>
       <label style="display: block; margin-top: 0.75rem">Period start (optional)
@@ -79,10 +71,7 @@
       <label style="display: block; margin-top: 0.5rem">Period end (optional)
         <input type="date" name="date_to" />
       </label>
-      <p class="muted" style="margin-top: 0.5rem; font-size: 0.9rem">
-        Leave both dates empty for a trailing window ending at the current time. If both are set, the period may be up to 365 days.
-      </p>
-      <p><button type="submit" class="button">Run rolling weekly</button></p>
+      <p><button type="submit" class="button">Run rolling</button></p>
     </form>
   </div>
   <script>
@@ -91,9 +80,6 @@
         try {
           var box = document.querySelector("[data-scenario-manager-alerts]");
           if (box) box.remove();
-          document.querySelectorAll("main > .error, main > .flash.success").forEach(function (el) {
-            el.remove();
-          });
           if (window.history && window.history.replaceState) {
             window.history.replaceState(null, "", "/scenarios");
           }

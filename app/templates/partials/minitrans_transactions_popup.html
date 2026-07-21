@@ -1,0 +1,110 @@
+{% from "partials/detection_tx_table_macros.html" import sort_th, pagination_bar %}
+<div class="det-wallet-tx">
+  <p class="muted" style="margin-top:0">
+    Wallet activity from minitrans
+    {% if anchor_display %}· detection anchor <strong>{{ anchor_display | shortdt }}</strong>{% endif %}
+    {% if wallets %}· wallet(s): {{ wallets | join(', ') }}{% endif %}
+  </p>
+
+  <form
+    id="det-minitrans-form"
+    class="filters-grid"
+    hx-get="/detections/{{ detection_id }}/minitrans-transactions"
+    hx-target="#det-tx-tab-panel"
+    hx-swap="innerHTML"
+    hx-trigger="submit, change from:#det-minitrans-include-after"
+  >
+    <input type="hidden" name="page" value="{{ page }}" />
+    <input type="hidden" name="sort_by" value="{{ sort_by }}" />
+    <input type="hidden" name="sort_dir" value="{{ sort_dir }}" />
+    <label>Period before detection
+      <select name="before_preset">
+        <option value="none" {% if before_preset == 'none' %}selected{% endif %}>None (anchor only)</option>
+        <option value="yesterday" {% if before_preset == 'yesterday' %}selected{% endif %}>Yesterday</option>
+        <option value="last_week" {% if before_preset == 'last_week' %}selected{% endif %}>Last week</option>
+        <option value="last_month" {% if before_preset == 'last_month' %}selected{% endif %}>Last month</option>
+        <option value="custom" {% if before_preset == 'custom' %}selected{% endif %}>Custom range</option>
+      </select>
+    </label>
+    <label>Custom from (date)
+      <input type="date" name="custom_date_from" value="{{ custom_date_from }}" />
+    </label>
+    <label>Custom from (time)
+      <input type="time" name="custom_time_from" value="{{ custom_time_from }}" step="60" />
+    </label>
+    <label>Custom to (date)
+      <input type="date" name="custom_date_to" value="{{ custom_date_to }}" />
+    </label>
+    <label>Custom to (time)
+      <input type="time" name="custom_time_to" value="{{ custom_time_to }}" step="60" />
+    </label>
+    <label class="checkbox-label">
+      <input
+        type="checkbox"
+        id="det-minitrans-include-after"
+        name="include_after"
+        value="1"
+        {% if include_after %}checked{% endif %}
+        hx-on:change="var f=document.getElementById('det-minitrans-form'); if(f){ var p=f.querySelector('[name=page]'); if(p) p.value='1'; }"
+      />
+      Include transactions after detection (until now)
+    </label>
+    <label>Rows
+      <select name="per_page">
+        {% for n in per_page_options %}
+          <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="filter-actions">
+      <button type="submit">Apply</button>
+    </div>
+  </form>
+
+  {% if error_msg %}
+    <p class="error">{{ error_msg }}</p>
+  {% else %}
+    {% if dt_from_display or dt_to_display %}
+      <p class="muted">
+        Window:
+        {% if dt_from_display %}from <strong>{{ dt_from_display | shortdt }}</strong>{% endif %}
+        {% if dt_to_display %}to <strong>{{ dt_to_display | shortdt }}</strong>{% endif %}
+      </p>
+    {% endif %}
+    <div class="muted tx-popup-result-summary">
+      Showing <strong>{{ rows|length }}</strong> of <strong>{{ total }}</strong>
+    </div>
+    {{ pagination_bar(page, pages, 'det-minitrans-form', 'window.amlDetWalletPage') }}
+    <div class="scroll-x">
+      <table class="data js-sortable">
+        <thead>
+          <tr>
+            {{ sort_th('Timestamp', 'timestamp', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Transaction ID', 'transaction_id', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Amount', 'amount', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Credited MSISDN', 'credited_msisdn', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Debited MSISDN', 'debited_msisdn', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Type', 'type', sort_by, sort_dir, 'det-minitrans-form') }}
+            {{ sort_th('Description', 'description', sort_by, sort_dir, 'det-minitrans-form') }}
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr{% if r.after_detection %} class="tx-row-after-detection"{% endif %}>
+              <td>{{ r.timestamp | shortdt }}</td>
+              <td>{{ r.transactionId }}</td>
+              <td>{{ r.transactionAmount | amount0 }}</td>
+              <td>{{ r.creditedMSISDN }}</td>
+              <td>{{ r.debitedMSISDN }}</td>
+              <td>{{ r.transactionType }}</td>
+              <td>{{ r.transactionDescription }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">No minitrans rows in this window.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted tx-popup-legend"><span class="tx-after-detection-swatch"></span> Yellow rows = transactions after the detection anchor</p>
+  {% endif %}
+</div>

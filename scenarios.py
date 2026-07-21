@@ -122,12 +122,35 @@ def _linked_raw_approved_only(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[_approved_row_mask(df["Approved"])].copy()
 
 
-def daily_d1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def _detection_base(base_all: pd.DataFrame, txn_filter: str) -> pd.DataFrame:
+    tf = (txn_filter or "approved_only").strip().lower()
+    if tf == "failed_only":
+        if "Rejected" in base_all.columns:
+            return base_all.loc[base_all["Rejected"].fillna(False).astype(bool)].copy()
+        return base_all.loc[~_approved_row_mask(base_all["Approved"])].copy() if "Approved" in base_all.columns else base_all.iloc[0:0]
+    if "Approved" in base_all.columns:
+        return base_all.loc[_approved_row_mask(base_all["Approved"])].copy()
+    return base_all.copy()
+
+
+def _link_raw_rows(
+    base: pd.DataFrame,
+    base_all: pd.DataFrame,
+    det: pd.DataFrame,
+    keys: list[str],
+    txn_filter: str,
+) -> pd.DataFrame:
+    tf = (txn_filter or "approved_only").strip().lower()
+    src = base_all if tf == "both" else base
+    return src.merge(det[keys].drop_duplicates(), on=keys, how="inner")
+
+
+def daily_d1(df: pd.DataFrame, p: ScenarioParams, txn_filter: str = "approved_only") -> Tuple[pd.DataFrame, pd.DataFrame]:
     # wallet/day: >= txn count AND >= unique cards, for per-txn amount >= threshold
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_d1)
     base_all = _filter_amount_ge(base_all, p.d_amount_min)
-    base = base_all[base_all["Approved"]].copy()
+    base = _detection_base(base_all, txn_filter)
     agg = {
         "TxnCount": ("Amount", "size"),
         "UniqueCards": ("CardId", pd.Series.nunique),
@@ -168,17 +191,17 @@ def daily_d1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Data
     # Link only approved rows that fed the aggregation (`base`). `base_all` also has failed /
     # non-approved attempts (used for NotApprovedCount in metrics); those must not appear as
     # "linked transactions" on the detection.
-    raw = base.merge(det[["WalletId", "TxnDate"]].drop_duplicates(), on=["WalletId", "TxnDate"], how="inner")
+    raw = _link_raw_rows(base, base_all, det, ["WalletId", "TxnDate"], txn_filter)
     det.insert(0, "ScenarioId", "D1")
     return det, raw
 
 
-def daily_d2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def daily_d2(df: pd.DataFrame, p: ScenarioParams, txn_filter: str = "approved_only") -> Tuple[pd.DataFrame, pd.DataFrame]:
     # card/day: >= distinct wallets, for per-txn amount >= threshold
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_d2)
     base_all = _filter_amount_ge(base_all, p.d_amount_min)
-    base = base_all[base_all["Approved"]].copy()
+    base = _detection_base(base_all, txn_filter)
     agg = {
         "UniqueWallets": ("WalletId", pd.Series.nunique),
         "TxnCount": ("Amount", "size"),
@@ -212,7 +235,7 @@ def daily_d2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Data
         return det.assign(ScenarioId="D2"), base_all.iloc[0:0].copy()
 
     # Same as D1: linked rows must match approved-only aggregation input (`base`).
-    raw = base.merge(det[["CardId", "TxnDate"]].drop_duplicates(), on=["CardId", "TxnDate"], how="inner")
+    raw = _link_raw_rows(base, base_all, det, ["CardId", "TxnDate"], txn_filter)
     det.insert(0, "ScenarioId", "D2")
     return det, raw
 
@@ -254,6 +277,7 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
     # Rolling N-day window (per wallet, default 7): thresholds may be met before N calendar days of history
     # (e.g. after 4 days) — each transaction is evaluated on the window ending that day.
     window_days = _rolling_window_days(df)
+    lookback_td = _rolling_lookback_from_df(df)
     lookback = window_days - 1
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_w1)
@@ -310,8 +334,11 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            # Evict outside rolling window [t - (N-1)d, t] inclusive by day.
-            cutoff = t - pd.Timedelta(days=lookback)
+            # Evict outside rolling window ending at t (inclusive).
+            if lookback_td >= pd.Timedelta(days=1):
+                cutoff = t - lookback_td + pd.Timedelta(days=1)
+            else:
+                cutoff = t - lookback_td + pd.Timedelta(seconds=1)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 old_ok = bool(approved.iat[old_pos])
@@ -388,6 +415,7 @@ def weekly_w1(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
 def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # Rolling N-day window (per card): >= distinct wallets AND total amount >= threshold
+    lookback_td = _rolling_lookback_from_df(df)
     lookback = _rolling_window_days(df) - 1
     base_all = df.copy()
     base_all = _filter_by_monitored_bank(base_all, p.monitor_bank_w2)
@@ -438,7 +466,10 @@ def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            cutoff = t - pd.Timedelta(days=lookback)
+            if lookback_td >= pd.Timedelta(days=1):
+                cutoff = t - lookback_td + pd.Timedelta(days=1)
+            else:
+                cutoff = t - lookback_td + pd.Timedelta(seconds=1)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 old_ok = bool(approved.iat[old_pos])
@@ -509,6 +540,7 @@ def weekly_w2(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
 def weekly_w3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # Rolling N-day window (per wallet): >= rejected attempts
+    lookback_td = _rolling_lookback_from_df(df)
     lookback = _rolling_window_days(df) - 1
     base = df[df["Rejected"]].copy()
     base = _filter_by_monitored_bank(base, p.monitor_bank_w3)
@@ -549,7 +581,10 @@ def weekly_w3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
             win.append((pos, t))
 
-            cutoff = t - pd.Timedelta(days=lookback)
+            if lookback_td >= pd.Timedelta(days=1):
+                cutoff = t - lookback_td + pd.Timedelta(days=1)
+            else:
+                cutoff = t - lookback_td + pd.Timedelta(seconds=1)
             while win and win[0][1] < cutoff:
                 old_pos, old_t = win.popleft()
                 if holder is not None:
@@ -600,6 +635,315 @@ def weekly_w3(df: pd.DataFrame, p: ScenarioParams) -> Tuple[pd.DataFrame, pd.Dat
 
 DAILY = {"D1": daily_d1, "D2": daily_d2, "D3": daily_d3}
 WEEKLY = {"W1": weekly_w1, "W2": weekly_w2, "W3": weekly_w3}
+
+
+# ---------------------------------------------------------------------------
+# Dynamic scenario runners (group + configurable period)
+# ---------------------------------------------------------------------------
+
+GROUP_TYPES = (
+    "many_cards_one_wallet",
+    "one_card_many_wallets",
+    "one_card_one_wallet",
+    "multiple_failed",
+)
+
+
+def period_lookback(unit: str, value: int) -> pd.Timedelta:
+    u = (unit or "day").strip().lower()
+    v = max(1, int(value))
+    if u == "hour":
+        return pd.Timedelta(hours=v)
+    if u == "day":
+        return pd.Timedelta(days=v)
+    if u == "week":
+        return pd.Timedelta(days=v * 7)
+    if u == "month":
+        return pd.Timedelta(days=v * 30)
+    return pd.Timedelta(days=v)
+
+
+def uses_calendar_day_bucket(unit: str, value: int) -> bool:
+    return (unit or "").strip().lower() == "day" and int(value) == 1
+
+
+def _params_from_thresholds(thresholds: dict, monitored_bank: str | None) -> ScenarioParams:
+    """Build ScenarioParams from dynamic scenario thresholds JSON."""
+    t = thresholds or {}
+    base = ScenarioParams()
+    return ScenarioParams(
+        d_amount_min=float(t.get("min_amount_per_txn", base.d_amount_min)),
+        d_total_amount_min=float(t.get("min_total_amount", base.d_total_amount_min)),
+        d1_min_txn=int(t.get("min_txn", base.d1_min_txn)),
+        d1_min_unique_cards=int(t.get("min_unique_cards", base.d1_min_unique_cards)),
+        d1_risk_min_total_amount=float(t.get("risk_min_total_amount", base.d1_risk_min_total_amount)),
+        d1_risk_min_expenditure_pct=float(t.get("risk_min_expenditure_pct", base.d1_risk_min_expenditure_pct)),
+        d2_min_wallets=int(t.get("min_wallets", base.d2_min_wallets)),
+        d2_risk_min_total_amount=float(t.get("risk_min_total_amount", base.d2_risk_min_total_amount)),
+        d2_risk_min_wallet_expenditure_pct=float(
+            t.get("risk_min_wallet_expenditure_pct", base.d2_risk_min_wallet_expenditure_pct)
+        ),
+        d2_risk_min_wallets_pct=float(t.get("risk_min_wallets_pct", base.d2_risk_min_wallets_pct)),
+        d3_min_rejected=int(t.get("min_rejected", base.d3_min_rejected)),
+        w1_min_txn=int(t.get("min_txn", base.w1_min_txn)),
+        w1_min_unique_cards=int(t.get("min_unique_cards", base.w1_min_unique_cards)),
+        w1_min_total_amount=float(t.get("min_total_amount", base.w1_min_total_amount)),
+        w2_min_wallets=int(t.get("min_wallets", base.w2_min_wallets)),
+        w2_min_txn=int(t.get("min_txn", base.w2_min_txn)),
+        w2_min_total_amount=float(t.get("min_total_amount", base.w2_min_total_amount)),
+        w3_min_rejected=int(t.get("min_rejected", base.w3_min_rejected)),
+        monitor_bank_d1=monitored_bank,
+        monitor_bank_d2=monitored_bank,
+        monitor_bank_d3=monitored_bank,
+        monitor_bank_w1=monitored_bank,
+        monitor_bank_w2=monitored_bank,
+        monitor_bank_w3=monitored_bank,
+    )
+
+
+def _set_scenario_id(det: pd.DataFrame, code: str) -> pd.DataFrame:
+    if det is None or det.empty:
+        return det
+    det = det.copy()
+    det["ScenarioId"] = code
+    return det
+
+
+def _rolling_lookback_from_df(df: pd.DataFrame) -> pd.Timedelta:
+    lb = df.attrs.get("rolling_lookback")
+    if lb is not None:
+        try:
+            return pd.Timedelta(lb)
+        except (TypeError, ValueError):
+            pass
+    days = _rolling_window_days(df)
+    return pd.Timedelta(days=max(1, days))
+
+
+def _prepare_rolling_df(df: pd.DataFrame, period_unit: str, period_value: int) -> pd.DataFrame:
+    work = df.copy()
+    work.attrs["rolling_lookback"] = period_lookback(period_unit, period_value)
+    # Legacy weekly runners also read rolling_window_days (inclusive day count).
+    lb = work.attrs["rolling_lookback"]
+    if isinstance(lb, pd.Timedelta):
+        work.attrs["rolling_window_days"] = max(1, int(lb / pd.Timedelta(days=1)))
+    return work
+
+
+def one_card_one_wallet_calendar(
+    df: pd.DataFrame,
+    thresholds: dict,
+    monitored_bank: str | None,
+    scenario_code: str,
+    txn_filter: str = "approved_only",
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """One card → one wallet: approved cash-ins grouped by card+wallet+day."""
+    amount_min = float(thresholds.get("min_amount_per_txn", 0))
+    total_min = float(thresholds.get("min_total_amount", 0))
+    min_txn = int(thresholds.get("min_txn", 1))
+
+    base_all = df.copy()
+    base_all = _filter_by_monitored_bank(base_all, monitored_bank)
+    base_all = _filter_amount_ge(base_all, amount_min)
+    base = _detection_base(base_all, txn_filter)
+    agg = {
+        "TxnCount": ("Amount", "size"),
+        "TotalAmount": ("Amount", "sum"),
+        "AvgAmount": ("Amount", "mean"),
+        "MinAmount": ("Amount", "min"),
+        "MaxAmount": ("Amount", "max"),
+        "CardHolderNamesPipe": (
+            "AccountHolder",
+            lambda s: "|".join(
+                sorted({str(x).strip() for x in s if str(x).strip() and str(x).lower() != "nan"})
+            ),
+        ),
+    }
+    if ISSUER_BANK_COL in base.columns:
+        agg["UniqueBanks"] = (ISSUER_BANK_COL, pd.Series.nunique)
+    grp = (
+        base.groupby(["CardId", "WalletId", "TxnDate"], dropna=False)
+        .agg(**agg)
+        .reset_index()
+    )
+    na = (
+        base_all.groupby(["CardId", "WalletId", "TxnDate"], dropna=False)["Approved"]
+        .apply(lambda s: int((~s.fillna(False).astype(bool)).sum()))
+        .reset_index(name="NotApprovedCount")
+    )
+    grp = grp.merge(na, on=["CardId", "WalletId", "TxnDate"], how="left")
+    grp["NotApprovedCount"] = grp["NotApprovedCount"].fillna(0).astype(int)
+    det = grp[(grp["TxnCount"] >= min_txn) & (grp["TotalAmount"] >= total_min)].copy()
+    if det.empty:
+        return det.assign(ScenarioId=scenario_code), base_all.iloc[0:0].copy()
+    raw = _link_raw_rows(base, base_all, det, ["CardId", "WalletId", "TxnDate"], txn_filter)
+    det.insert(0, "ScenarioId", scenario_code)
+    return det, raw
+
+
+def one_card_one_wallet_rolling(
+    df: pd.DataFrame,
+    thresholds: dict,
+    monitored_bank: str | None,
+    scenario_code: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Rolling window variant for one card → one wallet."""
+    amount_min = float(thresholds.get("min_amount_per_txn", 0))
+    total_min = float(thresholds.get("min_total_amount", 0))
+    min_txn = int(thresholds.get("min_txn", 1))
+    lookback = _rolling_lookback_from_df(df)
+
+    base_all = df.copy()
+    base_all = _filter_by_monitored_bank(base_all, monitored_bank)
+    base_all = _filter_amount_ge(base_all, amount_min)
+    if base_all.empty:
+        return base_all.iloc[0:0].assign(ScenarioId=scenario_code), base_all.iloc[0:0].copy()
+
+    base_all = base_all.sort_values(["CardId", "WalletId", "TxnTimestamp"], kind="mergesort")
+    det_rows: list[dict] = []
+    raw_rows: list[pd.DataFrame] = []
+
+    for (card_id, wallet_id), g in base_all.groupby(["CardId", "WalletId"], dropna=False, sort=False):
+        gg = g.reset_index(drop=False)
+        ts = pd.to_datetime(gg["TxnTimestamp"], errors="coerce")
+        amt = pd.to_numeric(gg["Amount"], errors="coerce").fillna(0.0)
+        approved = gg["Approved"].fillna(False).astype(bool)
+        win = deque()
+
+        for pos in range(len(gg)):
+            t = ts.iat[pos]
+            if pd.isna(t):
+                continue
+            win.append((pos, t))
+            cutoff = t - lookback
+            while win and win[0][1] < cutoff:
+                win.popleft()
+
+            wpos = [x[0] for x in win]
+            ok_mask = approved.iloc[wpos]
+            txn_count = int(ok_mask.sum())
+            if txn_count < min_txn:
+                continue
+            wamt_ok = _approved_amount_subset(amt, approved, wpos)
+            total_amount = float(wamt_ok.sum()) if len(wamt_ok) else 0.0
+            if total_amount < total_min:
+                continue
+            end_date = t.date()
+            det_rows.append(
+                {
+                    "ScenarioId": scenario_code,
+                    "CardId": card_id,
+                    "WalletId": wallet_id,
+                    "TxnWeek": end_date,
+                    "TxnCount": txn_count,
+                    "TotalAmount": total_amount,
+                    "AvgAmount": float(wamt_ok.mean()) if len(wamt_ok) else 0.0,
+                    "MinAmount": float(wamt_ok.min()) if len(wamt_ok) else 0.0,
+                    "MaxAmount": float(wamt_ok.max()) if len(wamt_ok) else 0.0,
+                    "NotApprovedCount": int(len(wpos) - txn_count),
+                }
+            )
+            raw_win = gg.iloc[wpos].copy()
+            raw_win = _linked_raw_approved_only(raw_win)
+            raw_win["ScenarioId"] = scenario_code
+            raw_win["TxnWeek"] = end_date
+            raw_rows.append(raw_win)
+
+    det = pd.DataFrame(det_rows)
+    raw = pd.concat(raw_rows, ignore_index=True) if raw_rows else base_all.iloc[0:0].copy()
+    if det.empty:
+        return det.assign(ScenarioId=scenario_code), base_all.iloc[0:0].copy()
+    det = det.drop_duplicates(subset=["CardId", "WalletId", "TxnWeek"], keep="first").reset_index(drop=True)
+    return det, raw
+
+
+def run_dynamic_scenario(
+    df: pd.DataFrame,
+    *,
+    code: str,
+    group_type: str,
+    period_unit: str,
+    period_value: int,
+    thresholds: dict,
+    monitored_bank: str | None = None,
+    transaction_filter: str = "approved_only",
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Run one configured scenario against a transaction dataframe.
+
+    Returns (detections_df, linked_raw_df) with ScenarioId set to ``code``.
+    """
+    gt = (group_type or "").strip()
+    pu = (period_unit or "day").strip().lower()
+    pv = max(1, int(period_value))
+    tf = (transaction_filter or "approved_only").strip().lower()
+    if gt == "multiple_failed":
+        tf = "failed_only"
+    p = _params_from_thresholds(thresholds, monitored_bank)
+
+    if gt == "many_cards_one_wallet":
+        if tf == "failed_only":
+            p_fail = ScenarioParams(
+                **{**p.__dict__, "d3_min_rejected": int(thresholds.get("min_txn", p.d1_min_txn)), "monitor_bank_d3": monitored_bank}
+            )
+            if uses_calendar_day_bucket(pu, pv):
+                det, raw = daily_d3(df, p_fail)
+            else:
+                work = _prepare_rolling_df(df, pu, pv)
+                p_fail_w = ScenarioParams(**{**p.__dict__, "w3_min_rejected": int(thresholds.get("min_txn", p.w1_min_txn)), "monitor_bank_w3": monitored_bank})
+                det, raw = weekly_w3(work, p_fail_w)
+        elif uses_calendar_day_bucket(pu, pv):
+            det, raw = daily_d1(df, p, tf)
+        else:
+            work = _prepare_rolling_df(df, pu, pv)
+            det, raw = weekly_w1(work, p)
+        return _set_scenario_id(det, code), raw
+
+    if gt == "one_card_many_wallets":
+        if tf == "failed_only":
+            p_fail = ScenarioParams(
+                **{**p.__dict__, "d3_min_rejected": int(thresholds.get("min_txn", 1)), "monitor_bank_d3": monitored_bank}
+            )
+            if uses_calendar_day_bucket(pu, pv):
+                det, raw = daily_d3(df, p_fail)
+            else:
+                work = _prepare_rolling_df(df, pu, pv)
+                p_fail_w = ScenarioParams(**{**p.__dict__, "w3_min_rejected": int(thresholds.get("min_txn", 1)), "monitor_bank_w3": monitored_bank})
+                det, raw = weekly_w3(work, p_fail_w)
+        elif uses_calendar_day_bucket(pu, pv):
+            det, raw = daily_d2(df, p, tf)
+        else:
+            work = _prepare_rolling_df(df, pu, pv)
+            det, raw = weekly_w2(work, p)
+        return _set_scenario_id(det, code), raw
+
+    if gt == "multiple_failed":
+        if uses_calendar_day_bucket(pu, pv):
+            det, raw = daily_d3(df, p)
+        else:
+            work = _prepare_rolling_df(df, pu, pv)
+            det, raw = weekly_w3(work, p)
+        return _set_scenario_id(det, code), raw
+
+    if gt == "one_card_one_wallet":
+        if uses_calendar_day_bucket(pu, pv):
+            return one_card_one_wallet_calendar(df, thresholds, monitored_bank, code, tf)
+        work = _prepare_rolling_df(df, pu, pv)
+        return one_card_one_wallet_rolling(work, thresholds, monitored_bank, code)
+
+    raise ValueError(f"Unknown scenario group type: {group_type!r}")
+
+
+def key_cols_for_scenario(group_type: str, period_unit: str, period_value: int) -> list[str]:
+    """Columns used to link detection rows back to raw transactions."""
+    gt = (group_type or "").strip()
+    calendar = uses_calendar_day_bucket(period_unit, period_value)
+    end_col = "TxnDate" if calendar else "TxnWeek"
+    if gt == "one_card_many_wallets":
+        return ["CardId", end_col]
+    if gt == "one_card_one_wallet":
+        return ["CardId", "WalletId", end_col]
+    return ["WalletId", end_col]
 
 
 def scenario_defaults() -> Dict[str, object]:
